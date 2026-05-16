@@ -1,0 +1,20 @@
+# Virtual environment 
+venv/
+
+#Sectret Keys 
+.env 
+
+#Database
+data/trading_journal.db
+
+#Python Cache files
+__pycache__/
+*.pyc
+*.pyo
+
+
+#Logs
+logs/
+
+#Mac system files
+.DS_Store
