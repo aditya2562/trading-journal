@@ -5,8 +5,112 @@ from typing import Optional, List, Dict, Any
 import logging
 from config.settings import DB_PATH
 
+from sqlalchemy import(
+    create_engine,
+    Column,
+    Integer,
+    Float,
+    String,
+    Boolean,
+    DateTime,
+    Text,
+    Index
+)
+from sqlalchemy.orm import declarative_base, Session
+from sqlalchemy import event
+
+Base = declarative_base()
+
 #Logging setup
 logger = logging.getLogger(__name__)
+
+class TradeModel(Base):
+
+    __tablename__ = "trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # --- TIMESTAMPS ---
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+    # --- WHAT WAS TRADED ---
+    ticker = Column(String, nullable=False, index=True)
+    company_name = Column(String)
+    sector = Column(String)
+
+    # --- POSITION ---
+    quantity = Column(Float, nullable=False)
+    direction = Column(String, default="long")
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float)
+    entry_date = Column(String, nullable=False, index=True)
+    exit_date = Column(String)
+
+    # --- RISK MANAGEMENT ---
+    stop_loss_price = Column(Float)
+    take_profit_price = Column(Float)
+    planned_risk_per_share = Column(Float)
+    planned_reward_per_share = Column(Float)
+
+    # --- OUTCOMES ---
+    gross_pnl = Column(Float)
+    net_pnl = Column(Float)
+    return_pct = Column(Float)
+    actual_rr_ratio = Column(Float)
+    outcome = Column(String, index=True)
+
+    # --- EXIT BEHAVIOUR ---
+    exit_reason = Column(String)
+    stop_loss_honored = Column(Integer)
+
+    # --- STRATEGY ---
+    strategy_name = Column(String)
+    timeframe = Column(String)
+    setup_description = Column(Text)
+
+    # --- REASONING ---
+    entry_reasoning = Column(Text)
+    exit_reasoning = Column(Text)
+
+    # --- PSYCHOLOGY ---
+    emotional_state = Column(String, index=True)
+    confidence_level = Column(Integer)
+    fomo_factor = Column(Integer, default=0)
+    followed_plan = Column(Integer, default=1)
+    pre_trade_notes = Column(Text)
+
+    # --- MARKET CONTEXT ---
+    market_condition = Column(String)
+    spy_direction = Column(String)
+    sector_performance = Column(Float)
+
+    # --- COSTS ---
+    commission = Column(Float, default=0.0)
+
+    def to_dict(self) -> Dict[str, Any]:
+
+        return{
+            column.name: getattr(self, column.name)
+            for column in self.__table__.columns
+        }
+
+    def __repr__(self) -> str:
+
+        return(
+            f"<Trade id={self.id} ticker={self.ticker} "
+            f"outcome={self.outcome} pnl={self.net_pnl}>"
+        )
+
+def get_engine():
+
+    engine = create_engine(
+        f"sqlite:///{DB_PATH}",
+        connect_args={"check_same_thread": False},
+        echo=False
+    )
+
+    return engine
 
 #Database Initialization
 def get_connection() -> sqlite3.Connection:
@@ -449,3 +553,22 @@ class TradeRepository:
         if deleted:
             logger.info(f"Deleted trade id={trade_id}")
         return deleted
+
+    def get_trades_as_dataframe(self):
+
+        import pandas as pd
+
+        engine = get_engine()
+
+        query = """
+            SELECT * FROM trades 
+            WHERE outcome != 'open'
+            ORDER BY entry_date ASC
+        """
+
+        df = pd.read_sql(query, engine)
+
+        df["entry_date"] = pd.to_datetime(df["entry_date"])
+        df["exit_date"] = pd.to_datetime(df["exit_date"])
+
+        return df
