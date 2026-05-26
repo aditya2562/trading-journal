@@ -86,7 +86,7 @@ class TradeModel(Base):
     sector_performance = Column(Float)
 
     # --- COSTS ---
-    commission = Column(Float, default=0.0)
+    comission = Column(Float, default=0.0)
 
     def to_dict(self) -> Dict[str, Any]:
 
