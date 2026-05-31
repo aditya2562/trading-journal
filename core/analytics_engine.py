@@ -365,6 +365,8 @@ class AnalyticsEngine:
         rr = self.compute_rr_analysis(df)
         drawdown = self.compute_drawdown(df)
         psychology = self.compute_psychology_metrics(df)
+        risk_metrics = self.compute_risk_metrics_summary(df)
+        behavioral = self.compute_behavioral_correlations(df)
 
         emotion_wr = {}
         if not psychology["emotion_win_rates"].empty:
@@ -388,10 +390,401 @@ class AnalyticsEngine:
         return {
             "summary": summary,
             "rr_analysis": rr,
+            "risk_metrics": risk_metrics,
             "max_drawdown_pct": drawdown["max_drawdown_pct"],
             "emotion_win_rates": emotion_wr,
             "strategy_win_rates": strategy_wr,
             "fomo_impact": psychology["fomo_impact"],
             "plan_adherence": psychology["plan_adherence_impact"],
             "avg_confidence_by_outcome": psychology["avg_confidence_by_outcome"],
+            "behavioral_correlation": behavioral,
+        }
+
+    def compute_sharpe_ratio(self, df: pd.DataFrame, risk_free_rate: float = 0.05) -> Dict[str, Any]:
+
+        if self._is_empty(df) or len(df) < 3:
+            
+            return {
+                "sharpe_ratio": 0.0,
+                "annualized_return_pct": 0.0,
+                "return_volatility": 0.0,
+                "trades_analyzed": 0,
+                "interpretation": "Insufficient trades for Sharpe calculation"
+            }
+
+        returns = df["return_pct"].dropna()
+
+        if len(returns) < 3:
+            return{
+                "sharpe_ratio": 0.0,
+                "annualized_return_pct": 0.0,
+                "return_volatility": 0.0,
+                "trades_analyzed": 0,
+                "interpretation": "Insufficient trades for Sharpe calculation"
+            }
+
+        mean_return = returns.mean()
+        std_return = returns.std()
+
+        df_dated = df.dropna(subset=["entry_date", "exit_date"]).copy()
+
+        if not df_dated.empty:
+
+            df_dated["holding_days"] = (pd.to_datetime(df_dated["exit_date"]) - pd.to_datetime(df_dated["entry_date"])).dt.days.clip(lower=1)
+
+            avg_holding_days = df_dated["holding_days"].mean()
+        else:
+            avg_holding_days = 1.0
+
+        trades_per_year = 252.0 / max(avg_holding_days, 1.0)
+
+        annualized_return = mean_return * trades_per_year
+        annualized_std = std_return * np.sqrt(trades_per_year)
+
+        risk_free_pct = risk_free_rate * 100
+
+        if annualized_std > 0:
+
+            sharpe = (annualized_return - risk_free_pct) / annualized_std
+        
+        else:
+
+            sharpe = 0.0
+
+        if sharpe < 0:
+            interpretation = "Negative — returns don't justify the risk"
+        elif sharpe < 1.0:
+            interpretation = "Below 1.0 — poor risk-adjusted performance"
+        elif sharpe < 2.0:
+            interpretation = "1.0 – 2.0 — good risk-adjusted performance"
+        elif sharpe < 3.0:
+            interpretation = "2.0 – 3.0 — excellent, professional level"
+        else:
+            interpretation = "Above 3.0 — exceptional"
+
+        return {
+            "sharpe_ratio": round(sharpe, 3),
+            "annualized_return_pct": round(annualized_return, 2),
+            "return_volatility": round(annualized_std, 2),
+            "avg_holding_days": round(avg_holding_days, 1),
+            "trades_per_year_estimate": round(trades_per_year, 1),
+            "trades_analyzed": len(returns),
+            "interpretation": interpretation,
+        }
+
+    def compute_calmar_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
+
+        if self._is_empty(df) or len(df) < 2:
+            return {
+                "calmar_ratio": 0.0,
+                "annualized_return_pct": 0.0,
+                "max_drawdown_pct": 0.0,
+                "interpretation": "Insufficient data"
+            }
+
+        sharpe_data = self.compute_sharpe_ratio(df)
+        annualized_return = sharpe_data["annualized_return_pct"]
+
+        dd_data = self.compute_drawdown(df)
+        max_dd = abs(dd_data["max_drawdown_pct"])
+
+        if max_dd > 0:
+            calmar = annualized_return / max_dd
+        else:
+            calmar = float("inf") if annualized_return > 0 else 0.0
+
+        if calmar == float("inf"):
+            interpretation = "No drawdown recorded — insufficient history"
+        elif calmar < 0:
+            interpretation = "Negative — system is losing money"
+        elif calmar < 1.0:
+            interpretation = "Below 1.0 — drawdowns exceed annual returns"
+        elif calmar < 3.0:
+            interpretation = "1.0 – 3.0 — acceptable risk management"
+        else:
+            interpretation = "Above 3.0 — strong risk management"
+
+        return {
+            "calmar_ratio": round(calmar, 3) if calmar != float("inf") else 0.0,
+            "annualized_return_pct": round(annualized_return, 2),
+            "max_drawdown_pct": round(max_dd, 2),
+            "interpretation": interpretation,
+        }
+    
+    def compute_risk_metrics_summary(self, df: pd.DataFrame) -> Dict[str, Any]:
+
+        sharpe = self.compute_sharpe_ratio(df)
+        calmar = self.compute_calmar_ratio(df)
+        drawdown = self.compute_drawdown(df)
+
+        return {
+            "sharpe_ratio": sharpe["sharpe_ratio"],
+            "sharpe_interpretation": sharpe["interpretation"],
+            "calmar_ratio": calmar["calmar_ratio"],
+            "calmar_interpretation": calmar["interpretation"],
+            "max_drawdown_pct": drawdown["max_drawdown_pct"],
+            "max_drawdown_dollars": drawdown["max_drawdown_dollars"],
+            "current_drawdown_pct": drawdown["current_drawdown_pct"],
+            "return_volatility": sharpe["return_volatility"],
+            "avg_holding_days": sharpe.get("avg_holding_days", 0.0),
+        }
+
+    def engineer_features(self, df: pd.DataFrame) -> pd.DataFrame:
+
+        if self._is_empty(df):
+            return df
+
+        enriched = df.copy()
+
+        enriched["entry_date_dt"] = pd.to_datetime(enriched["entry_date"])
+
+        enriched["entry_hour"] = enriched["entry_date_dt"].dt.hour
+        enriched["entry_day_of_week_num"] = enriched["entry_date"].dt.dayofweek
+        enriched["entry_day_name"] = enriched["entry_date_dt"].dt.day_name()
+        enriched["entry_month"] = enriched["entry_date_dt"].dt.month
+
+        enriched["is_monday_trade"] = (enriched["entry_day_of_week_num"] == 0).astype(int)
+        enriched["is_friday_trade"] = (enriched["entry_day_of_week_num"] == 4).astype(int)
+
+        enriched["is_morning_trade"] = (enriched["entry_hour"] < 10).astype(int)
+
+        has_exit = enriched["exit_date"].notna()
+        enriched["holding_days"] = np.nan
+
+        if has_exit.any():
+
+            exit_dates = pd.to_datetime(enriched.loc[has_exit, "exit_date"])
+            entry_dates = pd.to_datetime(enriched.loc[has_exit, "entry_date_dt"])
+            enriched.loc[has_exit, "holding_days"] = (exit_dates - entry_dates).dt.days.clip(lower = 0)
+
+        enriched["position_size"] = (enriched["entry_price"] * enriched["quantity"]).round(2)
+
+        has_stop = enriched["planned_risk_per_share"].notna()
+        enriched["risk_amount"] = np.nan
+
+        if has_stop.any():
+            enriched.loc[has_stop, "risk_amount"] = (enriched.loc[has_stop, "planned_risk_per_share"] * enriched.loc[has_stop, "quantity"]).round(2)
+
+        has_reward = enriched["planned_reward_per_share"].notna()
+        enriched["reward_amount"] = np.nan
+
+        if has_reward.any():    
+            enriched.loc[has_reward, "reward_amount"] = (enriched.loc[has_reward, "planned_reward_per_share"] * enriched.loc[has_reward, "quantity"]).round(2)
+
+        enriched["win_binary"] = enriched["outcome"].map({
+            "win": 1.0,
+            "loss": 0.0,
+            "breakeven": 0.5
+        })
+
+        enriched["high_confidence"] = (enriched["confidence_level"] >= 8).astype(int)
+
+        median_conf = enriched["confidence_level"].median()
+        enriched["above_median_confidence"] = (enriched["confidence_level"] > median_conf).astype(int)
+
+        enriched["is_impulsive"] = ((enriched["fomo_factor"] == 1) | (enriched["followed_plan"] == 0)).astype(int)
+        enriched["is_disciplined"] = ((enriched["stop_loss_price"].notna()) & (enriched["followed_plan"] == 1) & (enriched["fomo_factor"] == 0)).astype(int)
+
+        calm_states = ["calm", "neutral", "confident"]
+        enriched["is_emotional"] = (~enriched["emotional_state"].isin(calm_states)).astype(int)
+
+        enriched["market_aligned"] = ((enriched["direction"] == "long") & (enriched["spy_direction"] == "up")).astype(int)
+
+        enriched = enriched.drop(columns=["entry_date_dt"], errors="ignore")
+
+        logger.info(
+            f"Feature engineering: {len(df.columns)} → "
+            f"{len(enriched.columns)} columns"
+        )
+
+        return enriched
+
+    def compute_feature_correlations(self, df: pd.DataFrame) -> pd.DataFrame:
+
+        if self._is_empty(df) or len(df) < 5:
+            return pd.DataFrame(columns=["feature", "correlation", "strength", "direction"])
+
+        enriched = self.engineer_features(df)
+
+        correlation_features = [
+            "confidence_level",
+            "entry_hour",
+            "entry_day_of_week_num",
+            "entry_month",
+            "holding_days",
+            "position_size",
+            "risk_amount",
+            "high_confidence",
+            "above_median_confidence",
+            "is_impulsive",
+            "is_disciplined",
+            "is_emotional",
+            "is_morning_trade",
+            "is_monday_trade",
+            "is_friday_trade",
+            "market_aligned",
+            "fomo_factor",
+            "followed_plan",
+        ]
+
+        availabel = [f for f in correlation_features if f in enriched.columns]
+
+        if "return_pct" not in enriched.columns or not availabel:
+            return pd.DataFrame()
+
+        results = []
+        target = enriched["return_pct"].dropna()
+
+        for feature in availabel:
+            feature_series = enriched[feature].dropna()
+
+            aligned = pd.concat([target, feature_series], axis = 1).dropna()
+
+            if len(aligned) < 5:
+                continue
+
+            if aligned[feature].nunique() <= 1:
+                continue
+
+            corr = aligned["return_pct"].corr(aligned[feature])
+
+            if pd.isna(corr):
+                continue
+
+            abs_corr = abs(corr)
+            if abs_corr >= 0.5:
+                strength = "strong"
+            elif abs_corr >= 0.3:
+                strength = "moderate"
+            elif abs_corr >= 0.1:
+                strength = "weak"
+            else:
+                strength = "negligible"
+
+            direction = "positive" if corr > 0 else "negative"
+
+            results.append({
+                "feature": feature,
+                "correlation": round(corr, 4),
+                "abs_correlation": round(abs_corr, 4),
+                "strength": strength,
+                "direction": direction,
+            })
+
+        if not results:
+            return pd.DataFrame()
+
+        result_df = pd.DataFrame(results)
+
+        result_df = result_df.sort_values("abs_correlation", ascending=False).reset_index(drop=True)
+
+        return result_df
+
+    def compute_behavioral_correlations(self, df: pd.DataFrame) -> Dict[str, Any]:
+
+        if self._is_empty(df) or len(df) < 3:
+            return {
+                "findings": [],
+                "most_predictive_feature": None,
+                "top_correlation": 0.0,
+            }
+
+        enriched = self.engineer_features(df)
+        findings = []
+
+        impulsive = enriched[enriched["is_impulsive"] == 1]
+        disciplined = enriched[enriched["is_impulsive"] == 0]
+
+        if len(impulsive) >= 2 and len(disciplined) >= 2:
+            imp_wr = (impulsive["outcome"] == "win").mean() * 100
+            disc_wr = (disciplined["outcome"] == "win").mean() * 100
+            imp_pnl = impulsive["net_pnl"].mean()
+            disc_pnl = disciplined["net_pnl"].mean()
+
+        findings.append({
+            "factor": "impulsive_vs_disciplined",
+                "label": "Impulsive vs Disciplined Trades",
+                "impulsive_win_rate": round(imp_wr, 1),
+                "disciplined_win_rate": round(disc_wr, 1),
+                "impulsive_avg_pnl": round(float(imp_pnl), 2),
+                "disciplined_avg_pnl": round(float(disc_pnl), 2),
+                "win_rate_gap": round(disc_wr - imp_wr, 1),
+                "insight": (
+                    f"Disciplined trades win {round(disc_wr - imp_wr, 1)}% more often than impulsive trades"
+                )
+        })
+
+        aligned = enriched[enriched["market_aligned"] == 1]
+        against = enriched[enriched["market_aligned"] == 0]
+
+        if len(aligned) >= 2 and len(against) >= 2:
+            al_wr = (aligned["outcome"] == "win").mean() * 100
+            ag_wr = (against["outcome"] == "win").mean() * 100
+
+        findings.append({
+                "factor": "market_alignment",
+                "label": "Aligned vs Against Market Direction",
+                "aligned_win_rate": round(al_wr, 1),
+                "against_win_rate": round(ag_wr, 1),
+                "win_rate_gap": round(al_wr - ag_wr, 1),
+                "insight": (
+                    f"Trades aligned with market direction win {round(al_wr - ag_wr, 1)}% more often"
+                )
+            })
+
+        morning = enriched[enriched["is_morning_trade"] == 1]
+        non_morning = enriched[enriched["is_morning_trade"] == 0]
+
+        if len(morning) >= 2 and len(non_morning) >= 2:
+            m_wr = (morning["outcome"] == "win").mean() * 100
+            nm_wr = (non_morning["outcome"] == "win").mean() * 100
+            m_pnl = morning["net_pnl"].mean()
+            nm_pnl = non_morning["net_pnl"].mean()
+
+            findings.append({
+                "factor": "morning_trade",
+                "label": "Morning Trades vs Rest of Day",
+                "morning_win_rate": round(m_wr, 1),
+                "non_morning_win_rate": round(nm_wr, 1),
+                "morning_avg_pnl": round(float(m_pnl), 2),
+                "non_morning_avg_pnl": round(float(nm_pnl), 2),
+                "insight": (
+                    f"Morning trades (before 10am) have {round(m_wr - nm_wr, 1)}% different win rate vs rest of day"
+                )
+            })
+
+        high_conf = enriched[enriched["high_confidence"] == 1]
+        normal_conf = enriched[enriched["high_confidence"] == 0]
+
+        if len(high_conf) >= 2 and len(normal_conf) >= 2:
+            hc_wr = (high_conf["outcome"] == "win").mean() * 100
+            nc_wr = (normal_conf["outcome"] == "win").mean() * 100
+
+            overconfidence_detected = hc_wr < nc_wr
+
+            findings.append({
+                "factor": "high_confidence_trap",
+                "label": "High Confidence (8+) vs Normal Confidence",
+                "high_conf_win_rate": round(hc_wr, 1),
+                "normal_conf_win_rate": round(nc_wr, 1),
+                "overconfidence_detected": overconfidence_detected,
+                "insight": (
+                    "Overconfidence pattern detected — high confidence trades underperform" if overconfidence_detected else "Confidence calibration looks healthy"
+                )
+            })
+
+        corr_df = self.compute_feature_correlations(enriched)
+        if not corr_df.empty:
+            top_row = corr_df.iloc[0]
+            most_predictive = top_row["feature"]
+            top_correlation = top_row["correlation"]
+        else:
+            most_predictive = None
+            top_correlation = 0.0
+
+        return {
+            "findings": findings,
+            "most_predictive_feature": most_predictive,
+            "top_correlation": float(top_correlation),
+            "total_features_analyzed": len(corr_df) if not corr_df.empty else 0,
         }
