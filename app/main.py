@@ -2,13 +2,16 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from config.logging_config import setup_logging
+setup_logging()
+
 import streamlit as st
 import pandas as pd
 
 from core.trade_repository import initialize_database, TradeRepository
 from core.analytics_engine import AnalyticsEngine
 from core.visualization_engine import VisualizationEngine
-from app.utils import load_trades_df, load_open_trades, render_sidebar
+from app.utils import load_trades_df, load_open_trades, render_sidebar, safe_render
 
 st.set_page_config(
     page_title="AI Trading Journal",
@@ -108,9 +111,9 @@ st.divider()
 # ── Equity Curve ───────────────────────────────────────────────────────────────
 st.markdown("#### Equity Curve")
 # use_container_width=True makes the chart fill its column width
-st.plotly_chart(
-    viz.pnl_curve(df),
-    use_container_width=True
+safe_render(
+    lambda: st.plotly_chart(viz.pnl_curve(df), width="stretch"),
+    "P&L curve failed to render"
 )
 
 st.divider()
@@ -119,10 +122,11 @@ left, right = st.columns([1, 1.5])
 
 with left:
     st.markdown("#### Trade Outcomes")
-    st.plotly_chart(
-        viz.win_loss_donut(df),
-        use_container_width=True
+    safe_render(
+    lambda: st.plotly_chart(viz.win_loss_donut(df), width="stretch"),
+    " Win/Loss chart failed to render"
     )
+    
 
 with right:
     st.markdown("#### Recent Trades")

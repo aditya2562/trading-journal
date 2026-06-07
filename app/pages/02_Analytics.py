@@ -6,7 +6,7 @@ import streamlit as st
 
 from core.analytics_engine import AnalyticsEngine
 from core.visualization_engine import VisualizationEngine
-from app.utils import load_trades_df, render_sidebar
+from app.utils import load_trades_df, render_sidebar, safe_render
 
 st.set_page_config(
     page_title="Analytics — AI Trading Journal",
@@ -52,13 +52,9 @@ with tab1:
     strategy_df = engine.win_rate_by_strategy(df)
 
     if not strategy_df.empty:
-        st.plotly_chart(
-            viz.performance_by_category(
-                strategy_df,
-                "strategy_name",
-                "Win Rate & Avg P&L by Strategy",
-            ),
-            use_container_width=True,
+        safe_render(
+            lambda: st.plotly_chart(viz.performance_by_category(strategy_df,"strategy_name","Win Rate & Avg P&L by Strategy"), width="stretch"),
+            "Performance Chart failed to render"
         )
 
         st.markdown("#### Strategy Summary Table")
@@ -87,34 +83,26 @@ with tab2:
 
     with col_a:
         if not mc_df.empty:
-            st.plotly_chart(
-                viz.performance_by_category(
-                    mc_df,
-                    "market_condition",
-                    "Performance by Market Condition",
-                ),
-                use_container_width=True,
+            safe_render(
+                lambda: st.plotly_chart(viz.performance_by_category(mc_df,"market_condition","Performance by Market Condition"), width="stretch"),
+                "Chart failed to render"
             )
         else:
             st.info("Log market condition on trades to see this.")
 
     with col_b:
         if not timeframe_df.empty:
-            st.plotly_chart(
-                viz.performance_by_category(
-                    timeframe_df,
-                    "timeframe",
-                    "Performance by Timeframe",
-                ),
-                use_container_width=True,
+            safe_render(
+                lambda: st.plotly_chart(viz.performance_by_category(timeframe_df,"timeframe","Performance by Timeframe"), width="stretch"),
+                "Chart failed to render"
             )
         else:
             st.info("Log timeframe on trades to see this.")
 
     st.markdown("#### Monthly P&L")
-    st.plotly_chart(
-        viz.monthly_pnl_bar(df),
-        use_container_width=True,
+    safe_render(
+        lambda: st.plotly_chart(viz.monthly_pnl_bar(df), width="stretch"),
+        "Monthly P&L chart failed to render"
     )
 
 
@@ -129,13 +117,9 @@ with tab3:
     dow_df = engine.win_rate_by_day_of_week(df)
 
     if not dow_df.empty:
-        st.plotly_chart(
-            viz.performance_by_category(
-                dow_df,
-                "day_of_week",
-                "Win Rate & Avg P&L by Day of Week",
-            ),
-            use_container_width=True,
+        safe_render(
+            lambda: st.plotly_chart(viz.performance_by_category(dow_df,"day_of_week","Win Rate & Avg P&L by Day of Week"), width="stretch"),
+            "Chart failed to render"
         )
     else:
         st.info("Need more trades to analyze day-of-week patterns.")
@@ -145,9 +129,9 @@ with tab3:
         "Is your performance improving or deteriorating? "
         "A declining line means your edge is weakening."
     )
-    st.plotly_chart(
-        viz.rolling_win_rate_chart(df),
-        use_container_width=True,
+    safe_render(
+        lambda: st.plotly_chart(viz.rolling_win_rate_chart(df), width="stretch"),
+        "Rolling Win Rate chart failed to render"
     )
 
 
@@ -187,9 +171,9 @@ with tab4:
             help=risk["calmar_interpretation"],
         )
 
-    st.plotly_chart(
-        viz.drawdown_chart(df),
-        use_container_width=True,
+    safe_render(
+        lambda: st.plotly_chart(viz.drawdown_chart(df), width="stretch"),
+        "Drawdown chart failed to render"
     )
 
     st.markdown("#### P&L Distribution")
@@ -197,9 +181,9 @@ with tab4:
         "Are your wins bigger than your losses? "
         "Ideal: loss distribution tight near zero, wins spread wide."
     )
-    st.plotly_chart(
-        viz.pnl_distribution(df),
-        use_container_width=True,
+    safe_render(
+        lambda: st.plotly_chart(viz.pnl_distribution(df), width="stretch"),
+        "P&L Distribution chart failed to render"
     )
 
 
@@ -237,12 +221,12 @@ with tab5:
             "Your actual R:R is significantly below planned."
         )
 
-    st.plotly_chart(
-        viz.rr_scatter(df),
-        use_container_width=True,
+    safe_render(
+        lambda: st.plotly_chart(viz.rr_scatter(df), width="stretch"),
+        "Reward Risk chart failed to render"
     )
 
-    st.plotly_chart(
-        viz.correlation_bar(df),
-        use_container_width=True,
+    safe_render(
+        lambda: st.plotly_chart(viz.correlation_bar(df), width="stretch"),
+        "Correlation chart failed to render"
     )

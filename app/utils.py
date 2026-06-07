@@ -60,3 +60,20 @@ def render_sidebar() -> None:
 
         st.markdown("---")
         st.caption("AI Trading Journal v1.0")
+
+import logging
+import traceback
+
+def safe_render(func, fallback_message: str = "Unable to load this section."):
+    
+    import streamlit as st
+    try:
+        func()
+    except Exception as e:
+        logger = logging.getLogger("app.error_boundary")
+        logger.error(
+            f"Render error in {fallback_message}: "
+            f"{type(e).__name__}: {e}\n"
+            f"{traceback.format_exc()}"
+        )
+        st.error(f"⚠️ {fallback_message} — check logs for details.")

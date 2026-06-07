@@ -163,12 +163,12 @@ class MarketDataService:
         try:
             ticker = ticker.upper().strip()
             stock = yf.Ticker(ticker)
-            hist = stock.history(period="1d")
+            hist = stock.history(period="5d")
             is_valid = not hist.empty
 
             if not is_valid:
                 logger.warning(f"Ticker validation failed for: {ticker}")
-                return is_valid
+            return is_valid
         
         except Exception:
             return False

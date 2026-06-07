@@ -6,7 +6,7 @@ import streamlit as st
 
 from core.analytics_engine import AnalyticsEngine
 from core.visualization_engine import VisualizationEngine
-from app.utils import load_trades_df, render_sidebar
+from app.utils import load_trades_df, render_sidebar, safe_render
 
 st.set_page_config(
     page_title="Psychology — AI Trading Journal",
@@ -72,9 +72,9 @@ with tab1:
     emotion_wr = psych["emotion_win_rates"]
 
     if not emotion_wr.empty:
-        st.plotly_chart(
-            viz.emotion_performance_chart(df),
-            width="stretch",
+        safe_render(
+            lambda: st.plotly_chart(viz.emotion_performance_chart(df), width="stretch"),
+            "Emotion performance chart failed to render"
         )
 
         st.markdown("#### Emotion Summary Table")
@@ -137,9 +137,9 @@ with tab2:
                 help="Difference in avg P&L between planned and FOMO trades"
             )
 
-        st.plotly_chart(
-            viz.fomo_impact_chart(df),
-            width="stretch",
+        safe_render(
+            lambda: st.plotly_chart(viz.fomo_impact_chart(df), width="stretch"),
+            "FOMO Impact chart failed to render"
         )
 
         if fomo["fomo_win_rate"] < fomo["non_fomo_win_rate"] - 15:
@@ -162,9 +162,9 @@ with tab3:
         "you have a classic overconfidence problem."
     )
 
-    st.plotly_chart(
-        viz.confidence_vs_outcome(df),
-        width="stretch",
+    safe_render(
+        lambda: st.plotly_chart(viz.confidence_vs_outcome(df), width="stretch"),
+        "Confidence chart failed to render"
     )
 
     st.markdown("#### Plan Adherence Impact")
@@ -222,9 +222,9 @@ with tab4:
             f"(correlation: {behavioral['top_correlation']:+.3f})"
         )
 
-    st.plotly_chart(
-        viz.correlation_bar(df),
-        width="stretch",
+    safe_render(
+        lambda: st.plotly_chart(viz.correlation_bar(df), width="stretch"),
+        "Correlation chart failed to render"
     )
 
     if behavioral["findings"]:
