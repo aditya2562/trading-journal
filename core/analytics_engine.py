@@ -397,7 +397,7 @@ class AnalyticsEngine:
             "fomo_impact": psychology["fomo_impact"],
             "plan_adherence": psychology["plan_adherence_impact"],
             "avg_confidence_by_outcome": psychology["avg_confidence_by_outcome"],
-            "behavioral_correlation": behavioral,
+            "behavioral_correlations": behavioral,
         }
 
     def compute_sharpe_ratio(self, df: pd.DataFrame, risk_free_rate: float = 0.05) -> Dict[str, Any]:

@@ -158,6 +158,12 @@ with tab1:
                     st.markdown("**Root Cause**")
                     st.info(analysis.get("root_cause", "—"))
 
+                    coaching = analysis.get("one_sentence_coaching", "")
+                    if coaching:
+                        st.divider()
+                        st.markdown("**💬 Coaching Note**")
+                        st.success(f'"{coaching}"')
+
                     st.markdown("**Suggestions**")
                     for i, s in enumerate(
                         analysis.get("specific_suggestions", []), 1
@@ -269,6 +275,26 @@ with tab2:
                         f"**{patterns.get('overall_assessment', '—')}**"
                     )
 
+                archetype = patterns.get("trader_archetype", "")
+                risk = patterns.get("risk_of_ruin", "")
+
+                if archetype or risk:
+                    ac1, ac2 = st.columns(2)
+                    with ac1:
+                        if archetype:
+                            st.info(f"**Trader Archetype:** {archetype}")
+                    with ac2:
+                        if risk:
+                            risk_colors = {
+                                "low": "success",
+                                "medium": "info",
+                                "high": "warning",
+                                "critical": "error"
+                            }
+                            getattr(st, risk_colors.get(risk, "info"))(
+                                f"**Risk of Ruin:** {risk.upper()}"
+                            )
+
                 st.divider()
 
                 # Critical patterns
@@ -283,8 +309,10 @@ with tab2:
                         ):
                             st.markdown("**Evidence**")
                             st.info(pattern.get("evidence", "—"))
-                            st.markdown("**Financial Impact**")
-                            st.warning(pattern.get("financial_impact", "—"))
+                            st.markdown("**Estimated Annual Cost**")
+                            st.warning(pattern.get("estimated_annual_cost", "—"))
+                            st.markdown("**Root Cause**")
+                            st.info(pattern.get("root_cause", "—"))
                             st.markdown("**Correction**")
                             st.success(pattern.get("correction", "—"))
 
@@ -294,6 +322,11 @@ with tab2:
                     st.markdown("**Your Strengths**")
                     for s in strengths:
                         st.success(f"✅ {s}")
+
+                hidden = patterns.get("hidden_strength", "")
+                if hidden:
+                    st.markdown("**🔍 Hidden Strength You May Have Missed**")
+                    st.success(f"💡 {hidden}")
 
                 st.divider()
                 st.markdown("**🎯 Top Priority Action**")
