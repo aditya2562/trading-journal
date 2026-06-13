@@ -1,20 +1,40 @@
-# Virtual environment 
+# ── Virtual Environment ───────────────────────────────────────────────────────
 venv/
 
-#Sectret Keys 
-.env 
+# ── Secret Keys — NEVER commit these ─────────────────────────────────────────
+.env
 
-#Database
+# ── Database ──────────────────────────────────────────────────────────────────
 data/trading_journal.db
+data/trading_journal.db-shm
+data/trading_journal.db-wal
+data/*.db
 
-#Python Cache files
+# ── Python Cache ──────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
 
-
-#Logs
+# ── Logs ──────────────────────────────────────────────────────────────────────
 logs/
+*.log
 
-#Mac system files
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Mac System Files ──────────────────────────────────────────────────────────
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Distribution ──────────────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+
+# ── Streamlit ─────────────────────────────────────────────────────────────────
+.streamlit/secrets.toml
