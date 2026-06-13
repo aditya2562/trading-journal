@@ -60,3 +60,18 @@ def validate_config() -> None:
 
 
 validate_config()
+
+# ── Database URL ───────────────────────────────────────────────────────────────
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith("postgresql")
+
+def get_database_url() -> str:
+
+    if DATABASE_URL:
+
+        return DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+    else:
+
+        return f"sqlite:///{DB_PATH}"

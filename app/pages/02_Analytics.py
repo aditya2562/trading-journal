@@ -8,18 +8,26 @@ from core.analytics_engine import AnalyticsEngine
 from core.visualization_engine import VisualizationEngine
 from app.utils import load_trades_df, render_sidebar, safe_render
 
+from app.auth import require_auth, render_user_menu
+
 st.set_page_config(
     page_title="Analytics — AI Trading Journal",
     page_icon="📊",
     layout="wide",
 )
 
-render_sidebar()
+user = require_auth()
+if not user:
+    st.stop()
+
+render_user_menu(user)
+
+render_sidebar(user_id=user["id"])
 st.title("📊 Analytics")
 st.caption("Pattern detection across your complete trade history")
 st.divider()
 
-df = load_trades_df()
+df = load_trades_df(user_id=user["id"])
 
 if df.empty:
     st.info("No closed trades yet. Log some trades to see analytics.")
@@ -63,7 +71,7 @@ with tab1:
             c.replace("_", " ").title()
             for c in display.columns
         ]
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width="stretch", hide_index=True)
     else:
         st.info("Log trades with strategy names to see this analysis.")
 

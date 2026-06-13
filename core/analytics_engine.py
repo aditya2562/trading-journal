@@ -55,7 +55,7 @@ class AnalyticsEngine:
         else:
             avg_holding_days = 0.0
 
-        total_commissions = df["comission"].sum()
+        total_commissions = df["commission"].sum()
 
         avg_win = wins["net_pnl"].mean() if len(wins) > 0 else 0.0
         avg_loss = abs(losses["net_pnl"].mean()) if len(losses) > 0 else 0.0
@@ -701,18 +701,18 @@ class AnalyticsEngine:
             imp_pnl = impulsive["net_pnl"].mean()
             disc_pnl = disciplined["net_pnl"].mean()
 
-        findings.append({
-            "factor": "impulsive_vs_disciplined",
-                "label": "Impulsive vs Disciplined Trades",
-                "impulsive_win_rate": round(imp_wr, 1),
-                "disciplined_win_rate": round(disc_wr, 1),
-                "impulsive_avg_pnl": round(float(imp_pnl), 2),
-                "disciplined_avg_pnl": round(float(disc_pnl), 2),
-                "win_rate_gap": round(disc_wr - imp_wr, 1),
-                "insight": (
-                    f"Disciplined trades win {round(disc_wr - imp_wr, 1)}% more often than impulsive trades"
-                )
-        })
+            findings.append({
+                "factor": "impulsive_vs_disciplined",
+                    "label": "Impulsive vs Disciplined Trades",
+                    "impulsive_win_rate": round(imp_wr, 1),
+                    "disciplined_win_rate": round(disc_wr, 1),
+                    "impulsive_avg_pnl": round(float(imp_pnl), 2),
+                    "disciplined_avg_pnl": round(float(disc_pnl), 2),
+                    "win_rate_gap": round(disc_wr - imp_wr, 1),
+                    "insight": (
+                        f"Disciplined trades win {round(disc_wr - imp_wr, 1)}% more often than impulsive trades"
+                    )
+            })
 
         aligned = enriched[enriched["market_aligned"] == 1]
         against = enriched[enriched["market_aligned"] == 0]
@@ -721,16 +721,16 @@ class AnalyticsEngine:
             al_wr = (aligned["outcome"] == "win").mean() * 100
             ag_wr = (against["outcome"] == "win").mean() * 100
 
-        findings.append({
-                "factor": "market_alignment",
-                "label": "Aligned vs Against Market Direction",
-                "aligned_win_rate": round(al_wr, 1),
-                "against_win_rate": round(ag_wr, 1),
-                "win_rate_gap": round(al_wr - ag_wr, 1),
-                "insight": (
-                    f"Trades aligned with market direction win {round(al_wr - ag_wr, 1)}% more often"
-                )
-            })
+            findings.append({
+                    "factor": "market_alignment",
+                    "label": "Aligned vs Against Market Direction",
+                    "aligned_win_rate": round(al_wr, 1),
+                    "against_win_rate": round(ag_wr, 1),
+                    "win_rate_gap": round(al_wr - ag_wr, 1),
+                    "insight": (
+                        f"Trades aligned with market direction win {round(al_wr - ag_wr, 1)}% more often"
+                    )
+                })
 
         morning = enriched[enriched["is_morning_trade"] == 1]
         non_morning = enriched[enriched["is_morning_trade"] == 0]

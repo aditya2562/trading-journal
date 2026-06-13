@@ -1,9 +1,9 @@
+from config.settings import DB_PATH, get_database_url, IS_POSTGRES
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import logging
-from config.settings import DB_PATH
 
 from sqlalchemy import(
     create_engine,
@@ -18,6 +18,37 @@ from sqlalchemy import(
 )
 from sqlalchemy.orm import declarative_base, Session
 from sqlalchemy import event
+
+def _placeholder() -> str:
+    return "%s" if IS_POSTGRES else "?"
+
+def _adapt_query(sql: str) -> str:
+    if IS_POSTGRES:
+        return sql.replace("?", "%s")
+    return sql
+
+def _fetch_rows(cursor) -> list:
+
+    rows = cursor.fetchall()
+    if IS_POSTGRES:
+        return [dict(row) for row in rows]
+    return [dict(row) for row in rows]
+
+def _fetch_one(cursor) -> Optional[Dict]:
+
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+def _execute(conn, sql: str, params=None):
+
+    if IS_POSTGRES:
+        cursor = conn.cursor()
+        cursor.execute(sql, params or [])
+        return cursor
+    else:
+        return conn.execute(sql, params or [])
 
 Base = declarative_base()
 
@@ -86,7 +117,7 @@ class TradeModel(Base):
     sector_performance = Column(Float)
 
     # --- COSTS ---
-    comission = Column(Float, default=0.0)
+    commission = Column(Float, default=0.0)
 
     def to_dict(self) -> Dict[str, Any]:
 
@@ -104,236 +135,327 @@ class TradeModel(Base):
 
 def get_engine():
 
-    engine = create_engine(
-        f"sqlite:///{DB_PATH}",
-        connect_args={"check_same_thread": False},
-        echo=False
-    )
+    db_url = get_database_url()
+
+    if IS_POSTGRES:
+        engine = create_engine(
+            db_url,
+            pool_size=5,           
+            max_overflow=10,       
+            pool_pre_ping=True,    
+        )
+    else:
+        engine = create_engine(
+            db_url,
+            connect_args={"check_same_thread": False},
+            echo=False,
+        )
 
     return engine
 
 #Database Initialization
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+def get_connection():
+    
+    if IS_POSTGRES:
+        import psycopg2
+        import psycopg2.extras
 
-    return conn
+        conn = psycopg2.connect(get_database_url())
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
+
+        return conn
+    
+    else:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
 def initialize_database() -> None:
-    logger.info(f"Initializing database at {DB_PATH}")
+    logger.info(f"Initializing database - postgres={IS_POSTGRES}")
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not IS_POSTGRES:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     conn = get_connection()
 
-    with conn:
+    if IS_POSTGRES:
+        conn.autocommit = False
+        cursor = conn.cursor()
+
+        try:
+        # ── Users Table ───────────────────────────────────────────────────────
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id              TEXT PRIMARY KEY,
+                    email           TEXT NOT NULL UNIQUE,
+                    password_hash   TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    plan            TEXT NOT NULL DEFAULT 'free',
+                    is_admin        SMALLINT NOT NULL DEFAULT 0,
+                    created_at      TEXT NOT NULL,
+                    last_login      TEXT
+                )
+            """)
+
+        # ── Sessions Table ─────────────────────────────────────────────────────
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id          SERIAL PRIMARY KEY,
+                    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token       TEXT NOT NULL UNIQUE,
+                    created_at  TEXT NOT NULL,
+                    expires_at  TEXT NOT NULL
+                )
+            """)
+
         # --- Trades Table ---
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS trades(
-                -- IDENTITY
-                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at              TEXT NOT NULL,
-                updated_at              TEXT NOT NULL,
-                
-                -- WHAT WAS TRADED
-                ticker                  TEXT NOT NULL,
-                company_name            TEXT,
-                sector                  TEXT,
-                
-                -- POSITION DETAILS
-                quantity                REAL NOT NULL CHECK(quantity>0),
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trades(
+                    -- IDENTITY
+                    id                      SERIAL PRIMARY KEY,
+                    user_id                 TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    created_at              TEXT NOT NULL,
+                    updated_at              TEXT NOT NULL,
+                    
+                    -- WHAT WAS TRADED
+                    ticker                  TEXT NOT NULL,
+                    company_name            TEXT,
+                    sector                  TEXT,
+                    
+                    -- POSITION DETAILS
+                    quantity                DOUBLE PRECISION NOT NULL,
+                    direction               TEXT NOT NULL DEFAULT 'long',
+                    entry_price             DOUBLE PRECISION NOT NULL,
+                    exit_price              DOUBLE PRECISION,
+                    entry_date              TEXT NOT NULL,
+                    exit_date               TEXT,
 
-                direction               TEXT NOT NULL DEFAULT 'long'
-                                        CHECK(direction IN ('long', 'short')),
+                    -- RISK MANAGEMENT
+                    stop_loss_price         DOUBLE PRECISION,
+                    take_profit_price       DOUBLE PRECISION,
+                    planned_risk_per_share  DOUBLE PRECISION,
+                    planned_reward_per_share  DOUBLE PRECISION,
 
-                entry_price             REAL NOT NULL CHECK(entry_price>0),
-                exit_price              REAL CHECK(exit_price>0),
+                    -- CALCULATED_OUTCOMES
+                    gross_pnl               DOUBLE PRECISION,
+                    net_pnl                 DOUBLE PRECISION,
+                    return_pct              DOUBLE PRECISION,
+                    actual_rr_ratio         DOUBLE PRECISION,
+                    outcome                 TEXT, 
 
-                entry_date              TEXT NOT NULL,
-                exit_date               TEXT,
+                    -- EXIT BEHAVIOUR
+                    exit_reason             TEXT,
+                    stop_loss_honored       SMALLINT,
 
-                -- RISK MANAGEMENT
-                stop_loss_price         REAL,
-                take_profit_price       REAL,
+                    -- STRATEGY
+                    strategy_name           TEXT,
+                    timeframe               TEXT,
+                    setup_description       TEXT,
 
-                planned_risk_per_share    REAL,
-                planned_reward_per_share  REAL,
+                    --- REASONING (fed to AI)
+                    entry_reasoning         TEXT,
+                    exit_reasoning          TEXT,
 
-                -- CALCULATED_OUTCOMES
-                gross_pnl               REAL,
-                net_pnl                 REAL,
-                return_pct              REAL,
-                actual_rr_ratio         REAL,
+                    -- PSYCHOLOGY
+                    emotional_state         TEXT,
+                    confidence_level        SMALLINT,
+                    fomo_factor             SMALLINT DEFAULT 0,
+                    followed_plan           SMALLINT DEFAULT 1,
+                    pre_trade_notes         TEXT,
+                                    
+                    -- MARKET CONTEXT
+                    market_condition        TEXT,
+                    spy_direction           TEXT,
+                    sector_performance      DOUBLE PRECISION,
 
-                outcome                 TEXT CHECK(
-                                            outcome IN (
-                                                'win', 
-                                                'loss', 
-                                                'breakeven', 
-                                                'open'
-                                            )
-                                        ),
-
-                -- EXIT BEHAVIOUR
-                exit_reason             TEXT CHECK(
-                                            exit_reason IN (
-                                                'stop_loss_hit', 
-                                                'take_profit_hit', 
-                                                'manual', 
-                                                'time',
-                                                 NULL
-                                            )
-                                        ),
-
-                stop_loss_honored       INTEGER DEFAULT NULL
-                                        CHECK(
-                                            stop_loss_honored IN (0, 1, NULL)
-                                        ),
-
-                -- STRATEGY
-                strategy_name           TEXT,
-                timeframe               TEXT CHECK(
-                                            timeframe IN (
-                                                'scalp', 
-                                                'intraday', 
-                                                'swing', 
-                                                'position', 
-                                                NULL
-                                            )
-                                        ),
-
-                setup_description       TEXT,
-
-                --- REASONING (fed to AI)
-                entry_reasoning         TEXT,
-                exit_reasoning          TEXT,
-
-                -- PSYCHOLOGY
-                emotional_state         TEXT CHECK(
-                                            emotional_state IN (
-                                                    'calm', 
-                                                    'anxious', 
-                                                    'excited', 
-                                                    'fearful', 
-                                                    'confident', 
-                                                    'revenge', 
-                                                    'neutral', 
-                                                    NULL
-                                            )
-                                        ),
-
-                confidence_level        INTEGER CHECK(
-                                            confidence_level BETWEEN 1 AND 10 
-                                            OR confidence_level is NULL
-                                        ),
-
-                fomo_factor             INTEGER DEFAULT 0
-                                        CHECK (fomo_factor IN (0,1)),
-
-                followed_plan           INTEGER DEFAULT 1
-                                        CHECK (followed_plan IN (0,1)),
-                                
-                -- MARKET CONTEXT
-                market_condition        TEXT CHECK(
-                                            market_condition IN (
-                                                'trending_up', 
-                                                'trending_down',
-                                                'ranging', 
-                                                'volatile', 
-                                                NULL
-                                            )
-                                        ),
-
-                spy_direction           TEXT CHECK(
-                                            spy_direction IN (
-                                                'up', 
-                                                'down', 
-                                                'flat', 
-                                                NULL
-                                            )
-                                        ),
-
-                sector_performance      REAL,
-
-                -- COSTS
-                comission               REAL DEFAULT 0.0
-            )
-        """)
+                    -- COSTS
+                    commission               DOUBLE PRECISION DEFAULT 0.0
+                )
+            """)
 
         # --- AI Insights Table ---
-        conn.execute("""
+            cursor.execute("""
 
-            CREATE TABLE IF NOT EXISTS ai_insights (
+                CREATE TABLE IF NOT EXISTS ai_insights (
 
-                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-                trade_id                INTEGER REFERENCES trades(id) ON DELETE CASCADE,
-                insight_type            TEXT NOT NULL 
-                                        CHECK(
-                                            insight_type IN (
-                                                'trade_analysis',
-                                                'pattern_detection',
-                                                'weekly_summary',
-                                                'coaching'
-                                            )
-                                        ),
+                    id                      SERIAL PRIMARY KEY,
+                    user_id                 TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    trade_id                INTEGER REFERENCES trades(id) ON DELETE CASCADE,
+                    insight_type            TEXT NOT NULL ,
+                    content                 TEXT NOT NULL,
+                    model_used              TEXT NOT NULL,
+                    prompt_tokens           INTEGER,
+                    completion_tokens       INTEGER,
+                    tags                    TEXT,
+                    created_at              TEXT NOT NULL
+                )
+            """)
 
-                content                 TEXT NOT NULL,
-                model_used              TEXT NOT NULL,
-                prompt_tokens           INTEGER,
-                completion_tokens       INTEGER,
-                tags                    TEXT,
-                created_at              TEXT NOT NULL
-            )
-        """)
-
-        # --- Market Snapshots Table ---
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS market_snapshots (
-                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker                  TEXT NOT NULL,
-                snapshot_date           TEXT NOT NULL,
-                open_price              REAL,
-                high_price              REAL,
-                low_price               REAL,
-                close_price             REAL,
-                volume                  REAL,
-                daily_change_pct        REAL,
-                fetched_at              TEXT NOT NULL,
-
-                -- Prevent Duplicate snapshots for same ticker + date
-                UNIQUE(ticker, snapshot_date)            
-            )
-        """)
+            # --- Market Snapshots Table ---
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS market_snapshots (
+                    id                      SERIAL PRIMARY KEY,
+                    user_id                 TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    ticker                  TEXT NOT NULL,
+                    snapshot_date           TEXT NOT NULL,
+                    open_price              DOUBLE PRECISION,
+                    high_price              DOUBLE PRECISION,
+                    low_price               DOUBLE PRECISION,
+                    close_price             DOUBLE PRECISION,
+                    volume                  DOUBLE PRECISION,
+                    daily_change_pct        DOUBLE PRECISION,
+                    fetched_at              TEXT NOT NULL,
+                    UNIQUE (ticker, snapshot_date)           
+                )
+            """)
 
         # --- Indexes ---
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_trades_ticker
-            ON trades(ticker)
-        """)
+            indexes = [
+                    "CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(ticker)",
+                    "CREATE INDEX IF NOT EXISTS idx_trades_entry_date ON trades(entry_date)",
+                    "CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome)",
+                    "CREATE INDEX IF NOT EXISTS idx_insights_user_id ON ai_insights(user_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_insights_trade_id ON ai_insights(trade_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)",
+                    "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)",
+            ]
+            for idx in indexes:
+                cursor.execute(idx)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_trades_entry_date
-            ON trades(entry_date)      
-        """)
+            conn.commit()
+            logger.info("PostgreSQL schema initialized successfully")
+        
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Database initialization failed: {e}")
+            raise
+        finally:
+            cursor.close()
+            conn.close()
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_trades_outcome
-            ON trades(outcome)
-        """)
+    else:
+        with conn:
+            # ── Users Table ───────────────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id              TEXT PRIMARY KEY,
+                    email           TEXT NOT NULL UNIQUE,
+                    password_hash   TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    plan            TEXT NOT NULL DEFAULT 'free'
+                                    CHECK(plan IN ('free','pro','elite')),
+                    is_admin        INTEGER NOT NULL DEFAULT 0
+                                    CHECK(is_admin IN (0,1)),
+                    created_at      TEXT NOT NULL,
+                    last_login      TEXT
+                )
+            """)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_trades_emotional_state
-            ON trades(emotional_state) 
-        """)
+            # ── Sessions Table ────────────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token       TEXT NOT NULL UNIQUE,
+                    created_at  TEXT NOT NULL,
+                    expires_at  TEXT NOT NULL
+                )
+            """)
 
-        conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_insights_trade_id
-            ON ai_insights(trade_id)
-        """)
+            # ── Trades Table ──────────────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id                 TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    created_at              TEXT NOT NULL,
+                    updated_at              TEXT NOT NULL,
+                    ticker                  TEXT NOT NULL,
+                    company_name            TEXT,
+                    sector                  TEXT,
+                    quantity                REAL NOT NULL CHECK(quantity > 0),
+                    direction               TEXT NOT NULL DEFAULT 'long',
+                    entry_price             REAL NOT NULL CHECK(entry_price > 0),
+                    exit_price              REAL,
+                    entry_date              TEXT NOT NULL,
+                    exit_date               TEXT,
+                    stop_loss_price         REAL,
+                    take_profit_price       REAL,
+                    planned_risk_per_share  REAL,
+                    planned_reward_per_share REAL,
+                    gross_pnl               REAL,
+                    net_pnl                 REAL,
+                    return_pct              REAL,
+                    actual_rr_ratio         REAL,
+                    outcome                 TEXT,
+                    exit_reason             TEXT,
+                    stop_loss_honored       INTEGER,
+                    strategy_name           TEXT,
+                    timeframe               TEXT,
+                    setup_description       TEXT,
+                    entry_reasoning         TEXT,
+                    exit_reasoning          TEXT,
+                    emotional_state         TEXT,
+                    confidence_level        INTEGER,
+                    fomo_factor             INTEGER DEFAULT 0,
+                    followed_plan           INTEGER DEFAULT 1,
+                    pre_trade_notes         TEXT,
+                    market_condition        TEXT,
+                    spy_direction           TEXT,
+                    sector_performance      REAL,
+                    commission              REAL DEFAULT 0.0
+                )
+            """)
 
-        # conn.close()
-        logger.info("Database initialization complete")
+            # ── AI Insights Table ─────────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ai_insights (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id             TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    trade_id            INTEGER REFERENCES trades(id) ON DELETE CASCADE,
+                    insight_type        TEXT NOT NULL,
+                    content             TEXT NOT NULL,
+                    model_used          TEXT NOT NULL,
+                    prompt_tokens       INTEGER,
+                    completion_tokens   INTEGER,
+                    tags                TEXT,
+                    created_at          TEXT NOT NULL
+                )
+            """)
+
+            # ── Market Snapshots Table ────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS market_snapshots (
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id             TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    ticker              TEXT NOT NULL,
+                    snapshot_date       TEXT NOT NULL,
+                    open_price          REAL,
+                    high_price          REAL,
+                    low_price           REAL,
+                    close_price         REAL,
+                    volume              REAL,
+                    daily_change_pct    REAL,
+                    fetched_at          TEXT NOT NULL,
+                    UNIQUE(ticker, snapshot_date, user_id)
+                )
+            """)
+
+            # ── Indexes ───────────────────────────────────────────
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(ticker)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_entry_date ON trades(entry_date)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_insights_user_id ON ai_insights(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_insights_trade_id ON ai_insights(trade_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+
+        conn.close()
+                
+
+    logger.info("Database initialization complete")
 
 # --- Helper Function ---
 def _now() -> str:
@@ -378,7 +500,7 @@ def _calculate_trade_metrics(
 
 class TradeRepository:
 
-    def insert_trade(self, trade_data: Dict[str, Any]) -> int:
+    def insert_trade(self, trade_data: Dict[str, Any], user_id: Optional[str] = None) -> int:
 
         now = _now()
 
@@ -389,13 +511,12 @@ class TradeRepository:
                 quantity=trade_data["quantity"],
                 commission=trade_data.get("commission", 0.0),
                 stop_loss_price=trade_data.get("stop_loss_price"),
-                take_profit_price=trade_data.get("take_profit_price")
             )
             trade_data.update(metrics)
         else:
             trade_data["outcome"] = "open"
 
-        if trade_data.get("stop_loss_price") and trade_data.get("take_profit_price"):
+        if trade_data.get("stop_loss_price") and trade_data.get("entry_price"):
             trade_data["planned_risk_per_share"] = round(abs(trade_data["entry_price"]-trade_data["stop_loss_price"]), 4)
         
         if trade_data.get("take_profit_price") and trade_data.get("entry_price"):
@@ -404,46 +525,79 @@ class TradeRepository:
         trade_data["created_at"] = now
         trade_data["updated_at"] = now
 
+        if user_id:
+            trade_data["user_id"] = user_id
+
         columns = ", ".join(trade_data.keys())
-        placeholders = ", ".join(["?" for _ in trade_data])
+        placeholders = ", ".join([_placeholder() for _ in trade_data])
         sql = f"INSERT INTO trades ({columns}) VALUES ({placeholders})"
 
         conn = get_connection()
-        with conn:
-            cursor = conn.execute(sql, list(trade_data.values()))
-            trade_id = cursor.lastrowid
-        conn.close()
-        logger.info(f"Inserted Trade id={trade_id} ticker={trade_data.get('ticker')}")
+        try:
+            if IS_POSTGRES:
+                sql = f"INSERT INTO trades ({columns}) VALUES ({placeholders}) RETURNING id"
+                cursor = _execute(conn, sql, list(trade_data.values()))
+                trade_id = cursor.fetchone()["id"]
+                conn.commit()
+            else:
+                sql = f"INSERT INTO trades ({columns}) VALUES ({placeholders})"
+                with conn:
+                    cursor = _execute(conn, sql, list(trade_data.values()))
+                    trade_id = cursor.lastrowid
+        finally:
+            conn.close()
+        
+        logger.info(
+            f"Inserted trade id={trade_id} "
+            f"ticker={trade_data.get('ticker')} "
+            f"user_id={user_id}")
+        
         return trade_id
 
-    def get_all_trades(self, closed_only: bool = False) -> List[Dict]:
+    def get_all_trades(self, closed_only: bool = False, user_id: Optional[str] = None) -> List[Dict]:
 
         conn = get_connection()
 
-        if closed_only:
-            sql = """ 
-                SELECT * FROM trades 
-                WHERE outcome != 'open'
-                ORDER BY entry_date DESC
-            """
-        else:
-            sql = "SELECT * FROM trades ORDER BY entry_date DESC"
-        
-        cursor = conn.execute(sql)
+        conditions = []
+        params = []
 
-        trades = [dict(row) for row in cursor.fetchall()]
+        if closed_only:
+            conditions.append("outcome != 'open'")
+
+        if user_id:
+            conditions.append(f"user_id = {_placeholder()}")
+            params.append(user_id)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = _adapt_query(f"SELECT * FROM trades {where} ORDER BY entry_date DESC")
+        
+        cursor = _execute(conn, sql, params)
+
+        trades = _fetch_rows(cursor)
 
         conn.close()
         return trades
 
-    def get_trade_by_id(self, trade_id: int) -> Optional[Dict]:
+    def get_trade_by_id(self, trade_id: int, user_id: Optional[str] = None) -> Optional[Dict]:
 
         conn = get_connection()
-        cursor = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,))
-        row = cursor.fetchone()
+
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE id = ? AND user_id = ?"),
+                (trade_id, user_id)
+            )
+        else:    
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE id = ?"), 
+                (trade_id,)
+            )
+        row = _fetch_one(cursor)
         conn.close()
 
-        return dict(row) if row else None
+        return row
 
     def close_trade(
         self,
@@ -452,17 +606,20 @@ class TradeRepository:
         exit_date: str,
         exit_reason: str,
         exit_reasoning: Optional[str] = None,
-        stop_loss_honored: Optional[bool] = None
+        stop_loss_honored: Optional[bool] = None,
+        user_id: Optional[str] = None,
     ) -> bool:
 
-        existing = self.get_trade_by_id(trade_id)
+        existing = self.get_trade_by_id(trade_id, user_id=user_id)
 
         if not existing:
-            logger.warning(f"Attempted to close non-existent trade id={trade_id}")
+            logger.warning(
+                f"Trade id={trade_id} not found or wrong user"
+            )
             return False
 
         if existing["outcome"] != "open":
-            logger.warning(f"Attempted to close already closed trade id={trade_id}")
+            logger.warning(f"Trade id={trade_id} already closed")
             return False
 
         metrics = _calculate_trade_metrics(
@@ -474,12 +631,12 @@ class TradeRepository:
         )
 
         conn = get_connection()
-        with conn:
-            conn.execute("""
+        try:
+            sql = _adapt_query("""
                 UPDATE trades SET
                     exit_price          = ?,
                     exit_date           = ?,
-                    exit_reason         = ?, 
+                    exit_reason         = ?,
                     exit_reasoning      = ?,
                     stop_loss_honored   = ?,
                     gross_pnl           = ?,
@@ -489,7 +646,8 @@ class TradeRepository:
                     actual_rr_ratio     = ?,
                     updated_at          = ?
                 WHERE id = ?
-            """, (
+            """)
+            _execute(conn, sql, (
                 exit_price,
                 exit_date,
                 exit_reason,
@@ -501,72 +659,130 @@ class TradeRepository:
                 metrics["outcome"],
                 metrics["actual_rr_ratio"],
                 _now(),
-                trade_id
+                trade_id,
             ))
+            conn.commit()
+        finally:
+            conn.close()
 
-        conn.close()
-        logger.info(f"Closed trade id={trade_id} outcome={metrics['outcome']}"
-                    f"pnl={metrics['net_pnl']}")
+        logger.info(
+            f"Closed trade id={trade_id}" 
+            f"outcome={metrics['outcome']}"
+            f"pnl={metrics['net_pnl']}")
 
         return True
 
-    def get_trades_by_ticker(self, ticker: str) -> List[Dict]:
+    def get_open_trades(self, user_id: Optional[str] = None) -> List[Dict]:
 
         conn = get_connection()
-        cursor = conn.execute("SELECT * FROM trades WHERE ticker = ? ORDER BY entry_date DESC", (ticker.upper(),))
 
-        trades = [dict(row) for row in cursor.fetchall()]
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE outcome = 'open' AND user_id = ? ORDER BY entry_date DESC"), 
+                (user_id,)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                "SELECT * FROM trades WHERE outcome = 'open' ORDER BY entry_date DESC"
+            )
+
+        trades = _fetch_rows(cursor)
         conn.close()
 
         return trades
 
-    def get_trades_by_emotional_state(self, emotional_state: str) -> List[Dict]:
+    def get_trades_by_ticker(self, ticker: str, user_id: Optional[str] = None) -> List[Dict]:
 
         conn = get_connection()
-        cursor = conn.execute("SELECT * FROM trades WHERE emotional_state = ? ORDER BY entry_date DESC", (emotional_state,))
 
-        trades = [dict(row) for row in cursor.fetchall()]
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE ticker = ? AND user_id = ? ORDER BY entry_date DESC"),
+                (ticker.upper(), user_id)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE ticker = ? ORDER BY entry_date DESC"),
+                (ticker.upper(),)
+            )
+
+        trades = _fetch_rows(cursor)
         conn.close()
-
         return trades
 
-    def get_open_trades(self) -> List[Dict]:
+    def get_trades_by_emotional_state(self, emotional_state: str, user_id: Optional[str] = None) -> List[Dict]:
 
         conn = get_connection()
-        cursor = conn.execute("SELECT * FROM trades WHERE outcome = 'open' ORDER BY entry_date DESC")
 
-        trades = [dict(row) for row in cursor.fetchall()]
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE emotional_state = ? AND user_id = ? ORDER BY entry_date DESC"),
+                (emotional_state, user_id)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                _adapt_query("SELECT * FROM trades WHERE emotional_state = ? ORDER BY entry_date DESC"),
+                (emotional_state,)
+            )
+
+        trades = _fetch_rows(cursor)
         conn.close()
-
         return trades
 
-    def delete_trade(self, trade_id: int) -> bool:
+    def delete_trade(self, trade_id: int, user_id: Optional[str] = None) -> bool:
 
         conn = get_connection()
-        with conn:
-            cursor = conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
-
+        try:
+            if user_id:
+                cursor = _execute(
+                    conn,
+                    _adapt_query("DELETE FROM trades WHERE id = ? AND user_id = ?"),
+                    (trade_id, user_id)
+                )
+            else:
+                cursor = _execute(
+                    conn,
+                    _adapt_query("DELETE FROM trades WHERE id = ?"),
+                    (trade_id,)
+                )
             deleted = cursor.rowcount > 0
-
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
         if deleted:
             logger.info(f"Deleted trade id={trade_id}")
         return deleted
 
-    def get_trades_as_dataframe(self):
+    def get_trades_as_dataframe(self, user_id: Optional[str] = None):
 
         import pandas as pd
 
         engine = get_engine()
 
-        query = """
-            SELECT * FROM trades 
-            WHERE outcome != 'open'
-            ORDER BY entry_date ASC
-        """
+        from sqlalchemy import text
 
-        df = pd.read_sql(query, engine)
+        if user_id:
+            query = text("""
+                SELECT * FROM trades
+                WHERE outcome != 'open'
+                AND user_id = :user_id
+                ORDER BY entry_date ASC
+            """)
+            df = pd.read_sql(query, engine, params={"user_id": user_id})
+        else:
+            query = text("""
+                SELECT * FROM trades
+                WHERE outcome != 'open'
+                ORDER BY entry_date ASC
+            """)
+            df = pd.read_sql(query, engine)
 
         df["entry_date"] = pd.to_datetime(df["entry_date"])
         df["exit_date"] = pd.to_datetime(df["exit_date"])

@@ -320,7 +320,17 @@ class PromptTemplate:
 
         fomo_str = "YES 🚨" if trade.get("fomo_factor") else "No"
         plan_str = "Yes ✅" if trade.get("followed_plan") else "NO ❌"
-        stop_honored = "Yes ✅" if trade.get("stop_loss_honored") else "NO ❌"
+        sl_honored_raw = trade.get("stop_loss_honored")
+        exit_reason_raw = trade.get("exit_reason", "")
+
+        if sl_honored_raw == 1 or sl_honored_raw is True:
+            stop_honored = "Yes ✅"
+        elif sl_honored_raw == 0:
+            stop_honored = "NO ❌ — stop was moved or violated"
+        elif exit_reason_raw == "take_profit_hit":
+            stop_honored = "Yes ✅ (implied — take profit target was reached)"
+        else:
+            stop_honored = "Not recorded"
 
         warnings = []
         if trade.get("fomo_factor") and not trade.get("followed_plan"):
@@ -334,16 +344,23 @@ class PromptTemplate:
         ret = trade.get("return_pct", 0) or 0
         actual_rr = trade.get("actual_rr_ratio")
 
+        sl = trade.get('stop_loss_price')
+        tp = trade.get('take_profit_price')
+        ep = trade.get('exit_price')
+        stop_loss_str = f"${sl:.2f}" if sl else "Not set"
+        take_profit_str = f"${tp:.2f}" if tp else "Not set"
+        exit_str = f"${ep:.2f}" if ep else "Open"
+
         text = f"""Analyze this trade:
 
 TRADE: {trade.get('ticker', 'Unknown')} {trade.get('direction', 'long').upper()}
-Entry: ${trade.get('entry_price', 0):.2f} | Exit: ${trade.get('exit_price', 0):.2f} if trade.get('exit_price') else 'Open'
+Entry: ${trade.get('entry_price', 0):.2f} | Exit: {exit_str}
 Outcome: {trade.get('outcome', 'Unknown').upper()} | P&L: ${pnl:+.2f} | Return: {ret:+.2f}%
 Quantity: {trade.get('quantity', 0)} shares
 
 RISK MANAGEMENT:
-Stop Loss: ${trade.get('stop_loss_price', 0):.2f} if trade.get('stop_loss_price') else 'Not set' | Take Profit: ${trade.get('take_profit_price', 0):.2f} if trade.get('take_profit_price') else 'Not set'
-Planned R:R: {planned_rr} | Actual R:R: {f"{actual_rr:.2f}:1"} if actual_rr else 'Unknown'
+Stop Loss: {stop_loss_str} | Take Profit: {take_profit_str}
+Planned R:R: {planned_rr} | Actual R:R: {f"{actual_rr:.2f}:1" if actual_rr else 'Unknown'}
 Stop Loss Honored: {stop_honored} | Exit Reason: {trade.get('exit_reason', 'Unknown')}
 
 PSYCHOLOGY:

@@ -10,25 +10,25 @@ from core.trade_repository import TradeRepository
 from core.analytics_engine import AnalyticsEngine
 
 @st.cache_data(ttl=60)
-def load_trades_df() -> pd.DataFrame:
+def load_trades_df(user_id: str = None) -> pd.DataFrame:
 
     repo = TradeRepository()
-    return repo.get_trades_as_dataframe()
+    return repo.get_trades_as_dataframe(user_id=user_id)
 
 @st.cache_data(ttl=60)
-def load_open_trades() -> list:
+def load_open_trades(user_id: str = None) -> list:
 
     repo = TradeRepository()
-    return repo.get_open_trades()
+    return repo.get_open_trades(user_id=user_id)
 
-def render_sidebar() -> None:
+def render_sidebar(user_id: str = None) -> None:
 
     with st.sidebar:
         st.markdown("---")
         st.markdown("#### 📊 Quick Stats")
 
-        df = load_trades_df()
-        open_trades = load_open_trades()
+        df = load_trades_df(user_id=user_id)
+        open_trades = load_open_trades(user_id=user_id)
 
         if df.empty:
             st.caption("No closed trades yet")

@@ -8,20 +8,28 @@ from core.analytics_engine import AnalyticsEngine
 from core.visualization_engine import VisualizationEngine
 from app.utils import load_trades_df, render_sidebar, safe_render
 
+from app.auth import require_auth, render_user_menu
+
 st.set_page_config(
     page_title="Psychology — AI Trading Journal",
     page_icon="🧠",
     layout="wide",
 )
 
-render_sidebar()
+user = require_auth()
+if not user:
+    st.stop()
+
+render_user_menu(user)
+
+render_sidebar(user_id=user["id"])
 st.title("🧠 Trading Psychology")
 st.caption(
     "Behavioral finance analysis — understanding how your mental state drives your performance"
 )
 st.divider()
 
-df = load_trades_df()
+df = load_trades_df(user_id=user["id"])
 
 if df.empty:
     st.info(

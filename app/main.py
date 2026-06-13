@@ -12,6 +12,7 @@ from core.trade_repository import initialize_database, TradeRepository
 from core.analytics_engine import AnalyticsEngine
 from core.visualization_engine import VisualizationEngine
 from app.utils import load_trades_df, load_open_trades, render_sidebar, safe_render
+from app.auth import require_auth, render_user_menu
 
 st.set_page_config(
     page_title="AI Trading Journal",
@@ -21,14 +22,22 @@ st.set_page_config(
 )
 
 initialize_database()
-render_sidebar()
+
+user = require_auth()
+if not user:
+    st.stop()
+
+render_user_menu(user)
+render_sidebar(user_id=user["id"])
+
+st.session_state["current_user"] = user
 
 st.title("📈 AI Trading Journal")
-st.caption("Behavioral intelligence for better trading decisions")
+st.caption(f"Welcome back, {user['name']}")
 st.divider()
 
-df = load_trades_df()
-open_trades = load_open_trades()
+df = load_trades_df(user_id=user["id"])
+open_trades = load_open_trades(user_id=user["id"])
 
 if df.empty and not open_trades:
     st.markdown("### 👋 Welcome to Your Trading Journal")
@@ -156,7 +165,7 @@ with right:
 
     st.dataframe(
         display,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -177,6 +186,6 @@ if open_trades:
 
     st.dataframe(
         open_df[cols_to_show],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )

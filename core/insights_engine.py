@@ -1,24 +1,27 @@
 import json
-import sqlite3
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List
 
-from config.settings import DB_PATH
 from core.analytics_engine import AnalyticsEngine
 from core.ai_engine import AIEngine
-from core.trade_repository import TradeRepository
+from core.trade_repository import (
+    TradeRepository,
+    get_connection,
+    _execute,
+    _adapt_query,
+    _fetch_rows,
+    _fetch_one,
+    IS_POSTGRES,
+)
 
 logger = logging.getLogger(__name__)
 
 class InsightRepository:
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def _get_connection(self):
 
-        conn = sqlite3.connect(str(DB_PATH))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        return get_connection()
 
     def save_insight(
         self,
@@ -29,37 +32,48 @@ class InsightRepository:
         completion_tokens: int,
         trade_id: Optional[int] = None,
         tags: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
     ) -> int:
 
         content_str = json.dumps(content)
         tags_str = ",".join(tags) if tags else None
 
+        now = datetime.now(timezone.utc).isoformat()
         conn = self._get_connection()
-        with conn:
-            cursor = conn.execute("""
-                INSERT INTO ai_insights (
-                    trade_id,
-                    insight_type,
-                    content,
-                    model_used,
-                    prompt_tokens,
-                    completion_tokens,
-                    tags,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                trade_id,
-                insight_type,
-                content_str,
-                model_used,
-                prompt_tokens,
-                completion_tokens,
-                tags_str,
-                datetime.now(timezone.utc).isoformat(),
-            ))
-            insight_id = cursor.lastrowid
 
-        conn.close()
+        try:
+            if IS_POSTGRES:
+                sql = _adapt_query("""
+                    INSERT INTO ai_insights (
+                        user_id, trade_id, insight_type, content,
+                        model_used, prompt_tokens, completion_tokens,
+                        tags, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+                """)
+                cursor = _execute(conn, sql, (
+                    user_id, trade_id, insight_type, content_str,
+                    model_used, prompt_tokens, completion_tokens,
+                    tags_str, now,
+                ))
+                insight_id = cursor.fetchone()["id"]
+                conn.commit()
+            else:
+                sql = """
+                    INSERT INTO ai_insights (
+                        user_id, trade_id, insight_type, content,
+                        model_used, prompt_tokens, completion_tokens,
+                        tags, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                with conn:
+                    cursor = _execute(conn, sql, (
+                        user_id, trade_id, insight_type, content_str,
+                        model_used, prompt_tokens, completion_tokens,
+                        tags_str, now,
+                    ))
+                    insight_id = cursor.lastrowid
+        finally:
+            conn.close()
         logger.info(
             f"Saved insight id={insight_id} "
             f"type={insight_type} trade_id={trade_id}"
@@ -69,25 +83,44 @@ class InsightRepository:
     def get_insight_by_id(self, insight_id: int) -> Optional[Dict]:
 
         conn = self._get_connection()
-        cursor = conn.execute("SELECT * FROM ai_insights WHERE id = ?", (insight_id,))
-
-        row = cursor.fetchone()
+        cursor = _execute(
+            conn,
+            _adapt_query("SELECT * FROM ai_insights WHERE id = ?"),
+            (insight_id,)
+        )
+        row = _fetch_one(cursor)
         conn.close()
 
         if not row:
             return None
 
-        return self._deserialize_insight(dict(row))
+        return self._deserialize_insight(row)
 
-    def get_insights_for_trade(self, trade_id: int) -> List[Dict]:
+    def get_insights_for_trade(self, trade_id: int, user_id: str = None) -> List[Dict]:
 
         conn = self._get_connection()
-        cursor = conn.execute("""
-            SELECT * FROM ai_insights
-            WHERE trade_id = ?
-            ORDER BY created_at DESC
-        """, (trade_id,))
-        rows = [dict(row) for row in cursor.fetchall()]
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT * FROM ai_insights
+                    WHERE trade_id = ? AND user_id = ?
+                    ORDER BY created_at DESC
+                """),
+                (trade_id, user_id)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT * FROM ai_insights
+                    WHERE trade_id = ?
+                    ORDER BY created_at DESC
+                """),
+                (trade_id,)
+            )
+
+        rows = _fetch_rows(cursor)
         conn.close()
 
         return [self._deserialize_insight(row) for row in rows]
@@ -95,47 +128,102 @@ class InsightRepository:
     def get_insights_by_type(
         self,
         insight_type: str,
-        limit: int = 10
+        limit: int = 10,
+        user_id: str = None
     ) -> List[Dict]:
 
         conn = self._get_connection()
-        cursor = conn.execute("""
-            SELECT ai.*, t.ticker, t.outcome, t.net_pnl
-            FROM ai_insights ai
-            LEFT JOIN trades t ON ai.trade_id = t.id
-            WHERE ai.insight_type = ?
-            ORDER BY ai.created_at DESC
-            LIMIT ?
-        """, (insight_type, limit))
-        rows = [dict(row) for row in cursor.fetchall()]
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT ai.*, t.ticker, t.outcome, t.net_pnl
+                    FROM ai_insights ai
+                    LEFT JOIN trades t ON ai.trade_id = t.id
+                    WHERE ai.insight_type = ? AND ai.user_id = ?
+                    ORDER BY ai.created_at DESC
+                    LIMIT ?
+                """),
+                (insight_type, user_id, limit)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT ai.*, t.ticker, t.outcome, t.net_pnl
+                    FROM ai_insights ai
+                    LEFT JOIN trades t ON ai.trade_id = t.id
+                    WHERE ai.insight_type = ?
+                    ORDER BY ai.created_at DESC
+                    LIMIT ?
+                """),
+                (insight_type, limit)
+            )
+
+        rows = _fetch_rows(cursor)
         conn.close()
 
         return [self._deserialize_insight(row) for row in rows]
 
-    def get_all_insights(self, limit: int = 50) -> List[Dict]:
+    def get_all_insights(self, limit: int = 50, user_id: str = None) -> List[Dict]:
     
         conn = self._get_connection()
-        cursor = conn.execute("""
-            SELECT ai.*, t.ticker, t.outcome, t.net_pnl
-            FROM ai_insights ai
-            LEFT JOIN trades t ON ai.trade_id = t.id
-            ORDER BY ai.created_at DESC
-            LIMIT ?
-        """, (limit,))
-        rows = [dict(row) for row in cursor.fetchall()]
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT ai.*, t.ticker, t.outcome, t.net_pnl
+                    FROM ai_insights ai
+                    LEFT JOIN trades t ON ai.trade_id = t.id
+                    WHERE ai.user_id = ?
+                    ORDER BY ai.created_at DESC
+                    LIMIT ?
+                """),
+                (user_id, limit)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT ai.*, t.ticker, t.outcome, t.net_pnl
+                    FROM ai_insights ai
+                    LEFT JOIN trades t ON ai.trade_id = t.id
+                    ORDER BY ai.created_at DESC
+                    LIMIT ?
+                """),
+                (limit,)
+            )
+
+        rows = _fetch_rows(cursor)
         conn.close()
 
         return [self._deserialize_insight(row) for row in rows]
 
-    def get_insight_count_by_type(self) -> Dict[str, int]:
+    def get_insight_count_by_type(self, user_id: str = None) -> Dict[str, int]:
         
         conn = self._get_connection()
-        cursor = conn.execute("""
-            SELECT insight_type, COUNT(*) as count
-            FROM ai_insights
-            GROUP BY insight_type
-        """)
-        rows = cursor.fetchall()
+        if user_id:
+            cursor = _execute(
+                conn,
+                _adapt_query("""
+                    SELECT insight_type, COUNT(*) as count
+                    FROM ai_insights
+                    WHERE user_id = ?
+                    GROUP BY insight_type
+                """),
+                (user_id,)
+            )
+        else:
+            cursor = _execute(
+                conn,
+                """
+                    SELECT insight_type, COUNT(*) as count
+                    FROM ai_insights
+                    GROUP BY insight_type
+                """
+            )
+
+        rows = _fetch_rows(cursor)
         conn.close()
 
         return {row["insight_type"]: row["count"] for row in rows}
@@ -143,14 +231,14 @@ class InsightRepository:
     def get_total_tokens_used(self) -> Dict[str, int]:
         
         conn = self._get_connection()
-        cursor = conn.execute("""
+        cursor = _execute(conn, """
             SELECT
                 SUM(prompt_tokens) as total_prompt,
                 SUM(completion_tokens) as total_completion,
                 SUM(prompt_tokens + completion_tokens) as total_all
             FROM ai_insights
         """)
-        row = cursor.fetchone()
+        row = _fetch_one(cursor)
         conn.close()
 
         if not row or row["total_all"] is None:
@@ -180,13 +268,16 @@ class InsightRepository:
     def delete_insight(self, insight_id: int) -> bool:
 
         conn = self._get_connection()
-        with conn:
-            cursor = conn.execute(
-                "DELETE FROM ai_insights WHERE id = ?",
+        try:
+            cursor = _execute(
+                conn,
+                _adapt_query("DELETE FROM ai_insights WHERE id = ?"),
                 (insight_id,)
             )
             deleted = cursor.rowcount > 0
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
         return deleted
 
     def _deserialize_insight(self, row: Dict) -> Dict:
@@ -226,7 +317,8 @@ class InsightsEngine:
 
     def analyze_and_store_trade(
         self,
-        trade_id: int
+        trade_id: int,
+        user_id: str = None
     ) -> Dict[str, Any]:
 
         if not self.ai_available:
@@ -235,7 +327,7 @@ class InsightsEngine:
                 "error": "AI Engine not available — check OPENAI_API_KEY",
             }
 
-        trade = self.trade_repo.get_trade_by_id(trade_id)
+        trade = self.trade_repo.get_trade_by_id(trade_id, user_id=user_id)
 
         if not trade:
             return {
@@ -272,6 +364,7 @@ class InsightsEngine:
             completion_tokens=ai_result["completion_tokens"],
             trade_id=trade_id,
             tags=tags,
+            user_id=user_id,
         )
 
         return {
@@ -285,7 +378,7 @@ class InsightsEngine:
             "generated_at": ai_result["generated_at"],
         }
 
-    def detect_and_store_patterns(self) -> Dict[str, Any]:
+    def detect_and_store_patterns(self, user_id: str = None) -> Dict[str, Any]:
 
         if not self.ai_available:
             return {
@@ -293,7 +386,7 @@ class InsightsEngine:
                 "error": "AI Engine not available — check OPENAI_API_KEY",
             }
 
-        df = self.trade_repo.get_trades_as_dataframe()
+        df = self.trade_repo.get_trades_as_dataframe(user_id=user_id)
 
         if df.empty or len(df) < 3:
             return {
@@ -325,6 +418,7 @@ class InsightsEngine:
             completion_tokens=ai_result["completion_tokens"],
             trade_id=None,
             tags=["patterns", "behavioral", "portfolio"],
+            user_id=user_id,
         )
 
         return {
@@ -339,7 +433,8 @@ class InsightsEngine:
 
     def generate_and_store_weekly_summary(
         self,
-        days_back: int = 7
+        days_back: int = 7,
+        user_id: str = None
     ) -> Dict[str, Any]:
 
         if not self.ai_available:
@@ -349,7 +444,7 @@ class InsightsEngine:
             }
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
-        all_trades = self.trade_repo.get_all_trades(closed_only=True)
+        all_trades = self.trade_repo.get_all_trades(closed_only=True, user_id=user_id)
 
         def _make_aware(date_str: str) -> datetime:
     
@@ -375,7 +470,7 @@ class InsightsEngine:
             f"{len(weekly_trades)} trades"
         )
 
-        df = self.trade_repo.get_trades_as_dataframe()
+        df = self.trade_repo.get_trades_as_dataframe(user_id=user_id)
         ai_context = self.analytics.build_ai_context(df)
 
         ai_result = self.ai.generate_weekly_summary(
@@ -396,6 +491,7 @@ class InsightsEngine:
             completion_tokens=ai_result["completion_tokens"],
             trade_id=None,
             tags=["weekly", "summary", "coaching"],
+            user_id=user_id,
         )
 
         return {
@@ -410,37 +506,40 @@ class InsightsEngine:
 
     def get_trade_insight_history(
         self,
-        trade_id: int
+        trade_id: int,
+        user_id: str = None
     ) -> List[Dict]:
 
-        return self.insight_repo.get_insights_for_trade(trade_id)
+        return self.insight_repo.get_insights_for_trade(trade_id, user_id=user_id)
 
     def get_pattern_history(
         self,
-        limit: int = 5
+        limit: int = 5,
+        user_id: str = None
     ) -> List[Dict]:
 
         return self.insight_repo.get_insights_by_type(
-            "pattern_detection", limit=limit
+            "pattern_detection", limit=limit, user_id=user_id
         )
 
     def get_weekly_summary_history(
         self,
-        limit: int = 5
+        limit: int = 5,
+        user_id: str = None
     ) -> List[Dict]:
 
         return self.insight_repo.get_insights_by_type(
-            "weekly_summary", limit=limit
+            "weekly_summary", limit=limit, user_id=user_id
         )
     
-    def get_all_insights(self, limit: int = 50) -> List[Dict]:
+    def get_all_insights(self, limit: int = 50, user_id: str = None) -> List[Dict]:
 
-        return self.insight_repo.get_all_insights(limit=limit)
+        return self.insight_repo.get_all_insights(limit=limit, user_id=user_id)
 
-    def get_usage_stats(self) -> Dict[str, Any]:
+    def get_usage_stats(self, user_id: str = None) -> Dict[str, Any]:
 
         token_stats = self.insight_repo.get_total_tokens_used()
-        insight_counts = self.insight_repo.get_insight_count_by_type()
+        insight_counts = self.insight_repo.get_insight_count_by_type(user_id=user_id)
 
         return {
             "total_insights": sum(insight_counts.values()),

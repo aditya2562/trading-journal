@@ -9,13 +9,20 @@ from core.trade_repository import TradeRepository
 from core.market_data import MarketDataService
 from app.utils import load_trades_df, load_open_trades, render_sidebar
 
+from app.auth import require_auth, render_user_menu
+
 st.set_page_config(
     page_title="Log Trade — AI Trading Journal",
     page_icon="📝",
     layout="wide",
 )
 
-render_sidebar()
+user = require_auth()
+if not user:
+    st.stop()
+
+render_user_menu(user)
+render_sidebar(user_id=user["id"])
 
 st.title("📝 Trade Log")
 st.caption("Record your trades with full psychological and market context")
@@ -39,6 +46,11 @@ with tab_log:
 
     # st.form groups all inputs — only submits when button clicked.
     # Without a form, every keystroke triggers a full rerun.
+    is_closed = st.checkbox(
+        "✅ This trade is already closed",
+        help="Check this before filling the form if logging a completed trade"
+    )
+
     with st.form("new_trade_form", clear_on_submit=True):
 
         # ── SECTION 1: What Was Traded ─────────────────────────────────────────
@@ -243,7 +255,7 @@ with tab_log:
         with col18:
             market_condition = st.selectbox(
                 "Market Condition",
-                options=["", "trending_up", "trending_down", "ranging", "volatile"],
+                options=["", "trending up", "trending down", "ranging", "volatile"],
             )
         with col19:
             spy_direction = st.selectbox(
@@ -263,8 +275,6 @@ with tab_log:
 
         # ── SECTION 7: Exit (optional — for already closed trades) ─────────────
         st.markdown("**Exit Details** *(fill if trade is already closed)*")
-
-        is_closed = st.checkbox("This trade is already closed")
 
         exit_price = None
         exit_date_str = None
@@ -290,7 +300,7 @@ with tab_log:
             exit_reason = st.selectbox(
                 "Exit Reason",
                 options=[
-                    "take_profit_hit", "stop_loss_hit",
+                    "take profit hit", "stop loss hit",
                     "manual", "time"
                 ],
             )
@@ -299,8 +309,16 @@ with tab_log:
                 placeholder="Why did you exit?",
                 height=80,
             )
-            if stop_loss > 0:
-                stop_loss_honored = st.checkbox("Stop loss was honored (not moved)")
+            stop_loss_honored = st.radio(
+                "Was your stop loss honored? (not moved or ignored)",
+                options=[
+                    "Yes — I honored my stop loss",
+                    "No — I moved or ignored it",
+                    "No stop loss was set"
+                ],
+                index=0 if stop_loss > 0 else 2,
+                help="This tells the AI whether you followed your risk plan"
+            )
 
             exit_date_str = datetime.combine(
                 exit_date_val, exit_time_val
@@ -364,11 +382,13 @@ with tab_log:
                 trade_data["exit_date"] = exit_date_str
                 trade_data["exit_reason"] = exit_reason
                 trade_data["exit_reasoning"] = exit_reasoning or None
-                if stop_loss_honored is not None:
-                    trade_data["stop_loss_honored"] = int(stop_loss_honored)
+                if "No stop loss" not in stop_loss_honored:
+                    trade_data["stop_loss_honored"] = (
+                        1 if "Yes" in stop_loss_honored else 0
+                    )
 
             try:
-                trade_id = repo.insert_trade(trade_data)
+                trade_id = repo.insert_trade(trade_data, user_id=user["id"])
                 # Clear cache so dashboard reflects new trade immediately
                 st.cache_data.clear()
                 st.success(
@@ -385,7 +405,7 @@ with tab_log:
 with tab_close:
     st.markdown("#### Close an Open Trade")
 
-    open_trades = load_open_trades()
+    open_trades = load_open_trades(user_id=user["id"])
 
     if not open_trades:
         st.info("No open trades to close. Log a trade first.")
@@ -460,7 +480,7 @@ with tab_close:
             close_exit_reason = st.selectbox(
                 "Exit Reason *",
                 options=[
-                    "take_profit_hit", "stop_loss_hit",
+                    "take profit hit", "stop loss hit",
                     "manual", "time"
                 ],
             )
@@ -473,8 +493,10 @@ with tab_close:
 
             close_stop_honored = None
             if selected_trade.get("stop_loss_price"):
-                close_stop_honored = st.checkbox(
-                    "Stop loss was honored (not moved)"
+                close_stop_honored = st.radio(
+                    "Was your stop loss honored? (not moved or ignored)",
+                    options=["Yes — I honored my stop loss", "No — I moved or ignored it"],
+                    index=0,
                 )
 
             # Live P&L preview
@@ -499,13 +521,18 @@ with tab_close:
                 close_exit_date, close_exit_time
             ).isoformat()
 
+            final_stop_honored = None
+            if selected_trade.get("stop_loss_price") and close_stop_honored:
+                final_stop_honored = True if "Yes" in close_stop_honored else False
+
             success = repo.close_trade(
                 trade_id=selected_trade["id"],
                 exit_price=close_exit_price,
                 exit_date=exit_dt_str,
                 exit_reason=close_exit_reason,
                 exit_reasoning=close_exit_reasoning or None,
-                stop_loss_honored=close_stop_honored,
+                stop_loss_honored=final_stop_honored,
+                user_id=user["id"],
             )
 
             if success:

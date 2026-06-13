@@ -9,18 +9,26 @@ from core.trade_repository import TradeRepository
 from core.insights_engine import InsightsEngine
 from app.utils import load_trades_df, render_sidebar
 
+from app.auth import require_auth, render_user_menu
+
 st.set_page_config(
     page_title="AI Insights — AI Trading Journal",
     page_icon="🤖",
     layout="wide",
 )
 
-render_sidebar()
+user = require_auth()
+if not user:
+    st.stop()
+
+render_user_menu(user)
+
+render_sidebar(user_id=user["id"])
 st.title("🤖 AI Insights")
 st.caption("Behavioral analysis and coaching powered by GPT-4o")
 st.divider()
 
-df = load_trades_df()
+df = load_trades_df(user_id=user["id"])
 repo = TradeRepository()
 
 if df.empty:
@@ -41,7 +49,7 @@ if not ai_available:
     )
     st.stop()
 
-usage = engine.get_usage_stats()
+usage = engine.get_usage_stats(user_id=user["id"])
 token_data = usage["token_usage"]
 
 uc1, uc2, uc3, uc4 = st.columns(4)
@@ -65,10 +73,6 @@ with uc4:
 
 st.divider()
 
-if df.empty:
-    st.info("No closed trades yet. Log and close trades to unlock AI analysis.")
-    st.stop()
-
 tab1, tab2, tab3 = st.tabs([
     "🔍 Trade Analysis",
     "📊 Pattern Detection",
@@ -86,7 +90,7 @@ with tab1:
         st.markdown("#### Analyze a Trade")
 
     # Build trade selector options
-        all_trades = repo.get_all_trades(closed_only=True)
+        all_trades = repo.get_all_trades(closed_only=True, user_id=user["id"])
 
         if not all_trades:
             st.info("No closed trades available for analysis.")
@@ -116,7 +120,7 @@ with tab1:
 
             if analyze_btn:
                 with st.spinner("AI is analyzing..."):
-                    result = engine.analyze_and_store_trade(selected_id)
+                    result = engine.analyze_and_store_trade(selected_id, user_id=user["id"])
 
                 if result["success"]:
                     analysis = result["analysis"]
@@ -180,7 +184,7 @@ with tab1:
     with col_hist:
         st.markdown("#### Past Analyses")
 
-        past = engine.get_all_insights(limit=20)
+        past = engine.get_all_insights(limit=20, user_id=user["id"])
         trade_analyses = [
             i for i in past
             if i.get("insight_type") == "trade_analysis"
@@ -253,7 +257,7 @@ with tab2:
                 "Analyzing your complete trading history... "
                 "15-20 seconds."
             ):
-                result = engine.detect_and_store_patterns()
+                result = engine.detect_and_store_patterns(user_id=user["id"])
 
             if result["success"]:
                 patterns = result["patterns"]
@@ -348,7 +352,7 @@ with tab2:
     with col_old:
         st.markdown("#### Pattern History")
 
-        history = engine.get_pattern_history(limit=5)
+        history = engine.get_pattern_history(limit=5, user_id=user["id"])
 
         if not history:
             st.caption("No pattern analyses yet.")
@@ -402,7 +406,8 @@ with tab3:
         if weekly_btn:
             with st.spinner("Generating weekly review..."):
                 result = engine.generate_and_store_weekly_summary(
-                    days_back=days_back
+                    days_back=days_back,
+                    user_id=user["id"]
                 )
 
             if result["success"]:
@@ -456,7 +461,7 @@ with tab3:
     with col_old2:
         st.markdown("#### Past Reviews")
 
-        weekly_history = engine.get_weekly_summary_history(limit=5)
+        weekly_history = engine.get_weekly_summary_history(limit=5, user_id=user["id"])
 
         if not weekly_history:
             st.caption("No weekly reviews yet.")
