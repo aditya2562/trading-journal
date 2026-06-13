@@ -120,6 +120,7 @@ with tab_log:
             entry_time_val = st.time_input(
                 "Entry Time",
                 value=time(9, 30),  # Default: market open
+                step=60,
             )
 
         st.markdown("---")
@@ -295,7 +296,7 @@ with tab_log:
             with col22:
                 exit_date_val = st.date_input("Exit Date", value=date.today())
             with col23:
-                exit_time_val = st.time_input("Exit Time", value=time(15, 30))
+                exit_time_val = st.time_input("Exit Time", value=time(15, 30), key="exit_time_close", step=60,)
 
             exit_reason = st.selectbox(
                 "Exit Reason",
@@ -475,6 +476,7 @@ with tab_close:
                 close_exit_time = st.time_input(
                     "Exit Time",
                     value=time(15, 30),
+                    step=60,
                 )
 
             close_exit_reason = st.selectbox(
