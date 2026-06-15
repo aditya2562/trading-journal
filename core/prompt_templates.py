@@ -57,7 +57,7 @@ You identify the root behavioral cause behind statistical patterns.
 
 CRITICAL RULES:
 - Every pattern claim must cite specific statistics from the data provided
-- Rank patterns by estimated financial impact (dollars lost or at risk)
+- Rank patterns by actual realized financial impact (real dollars already lost to each pattern, computed from the trade counts and average losses provided)
 - Be specific about the correction — "be more patient" is not acceptable
 - Identify whether each pattern is improving or worsening over time
 
@@ -70,7 +70,7 @@ OUTPUT FORMAT — exactly this JSON, nothing else:
         {
             "pattern_name": <string>,
             "evidence": <string — specific statistics>,
-            "estimated_annual_cost": <string — dollar estimate>,
+            "total_realized_cost": <string — actual money lost to this pattern so far, computed as (number of trades in pattern) × (average loss per trade). Use ONLY the real numbers provided in the context. Do not project or annualize. Format as a dollar amount like "$1,224 lost across 12 trades">,
             "root_cause": <string>,
             "correction": <string — specific behavioral change>,
             "priority": <"critical"|"high"|"medium">
@@ -79,7 +79,7 @@ OUTPUT FORMAT — exactly this JSON, nothing else:
     "strengths": [<string>, <string>],
     "hidden_strength": <string — a positive pattern they may not have noticed>,
     "top_priority_action": <string — the single most important change>,
-    "estimated_improvement": <string — projected impact if action taken>,
+    "potential_recovery": <string — the total realized cost that could be avoided going forward if this pattern is fixed, summing the realized costs of the patterns. Based only on money already demonstrably lost, not projections>,
     "risk_of_ruin": <"low"|"medium"|"high"|"critical">
 }"""
 
@@ -402,10 +402,17 @@ Exit: "{trade.get('exit_reasoning', 'Not provided')}"
                 flag = " ← CRITICAL"
             elif stats["win_rate"] < 50:
                 flag = " ← below breakeven"
+
+            realized = stats["avg_pnl"] * stats["total_trades"]
+            realized_str = (
+                f" | realized cost so far: ${realized:,.2f}"
+                if realized < 0 else ""
+            )
+
             emotion_lines += (
                 f"  {emotion:12} {stats['win_rate']:5.1f}% win rate | "
                 f"{stats['total_trades']:3} trades | "
-                f"avg P&L ${stats['avg_pnl']:+.2f}{flag}\n"
+                f"avg P&L ${stats['avg_pnl']:+.2f}{realized_str}{flag}\n"
             )
 
         strategy_lines = ""

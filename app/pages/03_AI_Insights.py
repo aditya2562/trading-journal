@@ -313,8 +313,8 @@ with tab2:
                         ):
                             st.markdown("**Evidence**")
                             st.info(pattern.get("evidence", "—"))
-                            st.markdown("**Estimated Annual Cost**")
-                            st.warning(pattern.get("estimated_annual_cost", "—"))
+                            st.markdown("**Total Realized Cost So Far**")
+                            st.warning(pattern.get("total_realized_cost", "—"))
                             st.markdown("**Root Cause**")
                             st.info(pattern.get("root_cause", "—"))
                             st.markdown("**Correction**")
@@ -336,8 +336,8 @@ with tab2:
                 st.markdown("**🎯 Top Priority Action**")
                 st.error(patterns.get("top_priority_action", "—"))
                 st.info(
-                    f"**Estimated improvement:** "
-                    f"{patterns.get('estimated_improvement', '—')}"
+                    f"**Potential recovery if fixed:** "
+                    f"{patterns.get('potential_recovery', '—')}"
                 )
 
                 st.caption(
