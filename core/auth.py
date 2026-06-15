@@ -113,6 +113,55 @@ class UserRepository:
         conn.close()
         return users
 
+    def set_reset_token(self, user_id: str, token: str, expires: str) -> None:
+
+        conn = self._get_connection()
+        try:
+            _execute(
+                conn,
+                _adapt_query(
+                    "UPDATE users SET reset_token = ?, "
+                    "reset_token_expires = ? WHERE id = ?"
+                ),
+                (token, expires, user_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_user_by_reset_token(self, token: str):
+
+        conn = self._get_connection()
+        cursor = _execute(
+            conn,
+            _adapt_query("SELECT * FROM users WHERE reset_token = ?"),
+            (token,)
+        )
+        row = _fetch_one(cursor)
+        conn.close()
+        return row
+
+    def update_password(self, user_id: str, new_password: str) -> None:
+
+        password_bytes = new_password.encode("utf-8")
+        salt = bcrypt.gensalt(rounds=12)
+        password_hash = bcrypt.hashpw(password_bytes, salt).decode("utf-8")
+
+        conn = self._get_connection()
+        try:
+            _execute(
+                conn,
+                _adapt_query(
+                    "UPDATE users SET password_hash = ?, "
+                    "reset_token = NULL, reset_token_expires = NULL "
+                    "WHERE id = ?"
+                ),
+                (password_hash, user_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
 class AuthEngine:
 
     def __init__(self):
@@ -253,6 +302,86 @@ class AuthEngine:
             "plan": session["plan"],
             "is_admin": bool(session["is_admin"]),
         }
+
+    def request_password_reset(self, email: str) -> dict:
+
+        from core.email_service import EmailService
+
+        email = email.lower().strip()
+        user = self.user_repo.get_user_by_email(email)
+
+        if not user:
+            logger.info(f"Reset requested for non-existent email: {email}")
+            return {"success": True}
+
+        token = secrets.token_urlsafe(32)
+        expires = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat()
+
+        self.user_repo.set_reset_token(user["id"], token, expires)
+
+        email_service = EmailService()
+        sent = email_service.send_password_reset(
+            to_email=email,
+            reset_token=token,
+            user_name=user.get("name", "there"),
+        )
+
+        if not sent:
+            return {
+                "success": False,
+                "error": "Failed to send reset email. Try again later."
+            }
+
+        logger.info(f"Password reset initiated for {email}")
+        return {"success": True}
+
+    def reset_password(self, token: str, new_password: str) -> dict:
+
+        if not token:
+            return {"success": False, "error": "Invalid reset link"}
+
+        if len(new_password) < 8:
+            return {
+                "success": False,
+                "error": "Password must be at least 8 characters"
+            }
+        if not any(c.isdigit() for c in new_password):
+            return {
+                "success": False,
+                "error": "Password must contain at least one number"
+            }
+
+        user = self.user_repo.get_user_by_reset_token(token)
+
+        if not user:
+            return {
+                "success": False,
+                "error": "Invalid or expired reset link"
+            }
+
+        expires_str = user.get("reset_token_expires")
+        if not expires_str:
+            return {
+                "success": False,
+                "error": "Invalid or expired reset link"
+            }
+
+        expires = datetime.fromisoformat(
+            expires_str.split("+")[0]
+        ).replace(tzinfo=timezone.utc)
+
+        if datetime.now(timezone.utc) > expires:
+            return {
+                "success": False,
+                "error": "This reset link has expired. Request a new one."
+            }
+
+        self.user_repo.update_password(user["id"], new_password)
+
+        logger.info(f"Password reset completed for {user['email']}")
+        return {"success": True}
 
     def logout(self, token: str) -> None:
         """Deletes the session token — user is logged out."""

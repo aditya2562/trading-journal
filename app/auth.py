@@ -83,6 +83,35 @@ def render_login_page() -> None:
                     else:
                         st.error(result["error"])
 
+            with st.expander("Forgot your password?"):
+                with st.form("forgot_password_form"):
+                    st.caption(
+                        "Enter your email and we will send you a link to reset your password."
+                    )
+                    reset_email = st.text_input(
+                        "Email",
+                        placeholder="you@example.com",
+                        key="reset_email_input"
+                    )
+                    reset_submitted = st.form_submit_button(
+                        "Send Reset Link",
+                        use_container_width=True,
+                    )
+
+                if reset_submitted:
+                    if not reset_email:
+                        st.error("Please enter your email.")
+                    else:
+                        with st.spinner("Sending reset link..."):
+                            result = auth.request_password_reset(reset_email)
+                        if result["success"]:
+                            st.success(
+                                "If an account exists with that email, "
+                                "a reset link has been sent. Check your inbox."
+                            )
+                        else:
+                            st.error(result.get("error", "Something went wrong."))
+
         # ── Register Tab ──────────────────────────────────────────────────────
         with tab_register:
             

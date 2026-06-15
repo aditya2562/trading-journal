@@ -75,3 +75,6 @@ def get_database_url() -> str:
     else:
 
         return f"sqlite:///{DB_PATH}"
+
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+APP_URL = os.getenv("APP_URL", "http://localhost:8501")
